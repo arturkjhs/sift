@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "tgclient"
+version = "0.1.0"
+description = "Cross-platform Telegram client built on TDLib and PySide6"
+requires-python = ">=3.12"
+dependencies = [
+    "platformdirs>=4",
+    "python-dotenv>=1",
+    "PySide6>=6.9",
+    "qasync>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["ruff", "mypy"]
+
+[project.scripts]
+tgclient = "tgclient.app:main"
+tgclient-cli = "tgclient.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/tgclient"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"

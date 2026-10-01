@@ -1,0 +1,12 @@
+module TgClient
+Main 1.0 Main.qml
+singleton Theme 1.0 Theme.qml
+AuthView 1.0 AuthView.qml
+MainView 1.0 MainView.qml
+FolderTabs 1.0 FolderTabs.qml
+ChatDelegate 1.0 ChatDelegate.qml
+Avatar 1.0 Avatar.qml
+MessageView 1.0 MessageView.qml
+MessageDelegate 1.0 MessageDelegate.qml
+Composer 1.0 Composer.qml
+MediaContent 1.0 MediaContent.qml

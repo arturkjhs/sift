@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+.env
+vendor/td/
+vendor/tdlib/
+dist/
+build/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/

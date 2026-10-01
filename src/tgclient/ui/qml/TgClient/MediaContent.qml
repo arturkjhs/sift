@@ -1,0 +1,269 @@
+import QtQuick
+import QtQuick.Window
+
+// Media part of a message bubble: photo/video thumbnail, sticker, round video, file card, voice.
+Item {
+    id: root
+
+    property string kind: ""
+    property string source: ""
+    property int mediaWidth: 0
+    property int mediaHeight: 0
+    property var fileId: 0
+    property string fileName: ""
+    property string fileInfo: ""
+    property string fileState: ""
+    property real fileProgress: 0
+    property string duration: ""
+    property var waveform: []
+    property string stickerEmoji: ""
+    property real maxWidth: 300
+    property var messageId: 0
+
+    signal activated()
+
+    readonly property bool isVisual: kind === "photo" || kind === "video" || kind === "animation"
+    readonly property bool isCard: kind === "document" || kind === "audio"
+    readonly property bool busy: fileState === "downloading" || fileState === "uploading"
+    readonly property real visualScale: isVisual && mediaWidth > maxWidth ? maxWidth / mediaWidth : 1
+    readonly property int radiusPx: Math.round(9 * Screen.devicePixelRatio)
+    readonly property bool isCurrentVoice: voice.fileId !== 0 && voice.fileId === root.fileId
+
+    readonly property real naturalWidth: isVisual ? Math.round(mediaWidth * visualScale)
+                                       : kind === "videoNote" ? 200
+                                       : kind === "sticker" ? mediaWidth
+                                       : isCard ? card.implicitWidth
+                                       : kind === "voice" ? voiceRow.implicitWidth : 0
+
+    implicitWidth: naturalWidth
+    implicitHeight: isVisual ? Math.round(mediaHeight * visualScale)
+                  : kind === "videoNote" ? 200
+                  : kind === "sticker" ? mediaHeight
+                  : isCard ? card.implicitHeight
+                  : kind === "voice" ? voiceRow.implicitHeight : 0
+    visible: kind !== ""
+
+    function clock(seconds) {
+        const m = Math.floor(seconds / 60), s = seconds % 60
+        return m + ":" + (s < 10 ? "0" : "") + s
+    }
+
+    // --- photo, video, animation, round video ---------------------------------------------
+    Item {
+        anchors.fill: parent
+        visible: root.isVisual || root.kind === "videoNote"
+
+        Rectangle {
+            anchors.fill: parent
+            radius: root.kind === "videoNote" ? width / 2 : 9
+            color: Theme.pill
+        }
+
+        Image {
+            anchors.fill: parent
+            source: root.source === "" ? "" : root.source + "/" + root.radiusPx
+            sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
+            sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
+            asynchronous: true
+            smooth: true
+        }
+
+        Rectangle {
+            visible: root.kind !== "photo" || root.busy
+            anchors.centerIn: parent
+            width: 46
+            height: 46
+            radius: 23
+            color: "#99000000"
+
+            Text {
+                anchors.centerIn: parent
+                text: root.busy ? Math.round(root.fileProgress * 100) + "%" : "\u25b6"
+                color: "#FFFFFF"
+                font.pixelSize: root.busy ? 12 : 18
+                font.weight: Font.DemiBold
+            }
+        }
+
+        Rectangle {
+            visible: root.duration !== "" && root.kind !== "photo"
+            x: 6
+            y: 6
+            width: durationText.implicitWidth + 12
+            height: 20
+            radius: 10
+            color: "#99000000"
+
+            Text {
+                id: durationText
+                anchors.centerIn: parent
+                text: root.duration
+                color: "#FFFFFF"
+                font.pixelSize: 11
+            }
+        }
+
+        TapHandler { onTapped: root.activated() }
+    }
+
+    // --- sticker ----------------------------------------------------------------------------
+    Item {
+        anchors.fill: parent
+        visible: root.kind === "sticker"
+
+        Image {
+            id: stickerImage
+            anchors.fill: parent
+            source: root.kind === "sticker" ? root.source : ""
+            sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
+            sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
+            fillMode: Image.PreserveAspectFit
+            asynchronous: true
+        }
+
+        Text {
+            anchors.centerIn: parent
+            visible: stickerImage.status !== Image.Ready
+            text: root.stickerEmoji
+            font.pixelSize: 64
+        }
+    }
+
+    // --- document / audio card --------------------------------------------------------------
+    Row {
+        id: card
+        visible: root.isCard
+        spacing: 10
+
+        Rectangle {
+            width: 44
+            height: 44
+            radius: 22
+            color: Theme.accent
+
+            Text {
+                anchors.centerIn: parent
+                text: root.busy ? "\u2715"
+                    : root.fileState === "ready" ? root.extension(root.fileName) : "\u2193"
+                color: Theme.textOnAccent
+                font.pixelSize: root.fileState === "ready" && !root.busy ? 10 : 16
+                font.weight: Font.Bold
+            }
+
+            TapHandler { onTapped: root.activated() }
+        }
+
+        Column {
+            anchors.verticalCenter: parent.verticalCenter
+            width: Math.min(220, Math.max(nameText.implicitWidth, infoText.implicitWidth),
+                            root.maxWidth - 54)
+            spacing: 2
+
+            Text {
+                id: nameText
+                width: parent.width
+                text: root.fileName
+                textFormat: Text.PlainText
+                elide: Text.ElideMiddle
+                color: Theme.text
+                font.pixelSize: Theme.fontBody
+                font.weight: Font.DemiBold
+            }
+            Text {
+                id: infoText
+                width: parent.width
+                text: root.fileInfo
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+            Rectangle {
+                visible: root.busy
+                width: parent.width
+                height: 3
+                radius: 1.5
+                color: Theme.separator
+
+                Rectangle {
+                    width: parent.width * root.fileProgress
+                    height: parent.height
+                    radius: 1.5
+                    color: Theme.accent
+                }
+            }
+        }
+    }
+
+    function extension(name) {
+        const dot = name.lastIndexOf(".")
+        return dot > 0 ? name.slice(dot + 1, dot + 5).toUpperCase() : "FILE"
+    }
+
+    // --- voice message ----------------------------------------------------------------------
+    Row {
+        id: voiceRow
+        visible: root.kind === "voice"
+        spacing: 10
+
+        Rectangle {
+            width: 40
+            height: 40
+            radius: 20
+            color: Theme.accent
+
+            Text {
+                anchors.centerIn: parent
+                anchors.horizontalCenterOffset: text === "\u25b6" ? 2 : 0
+                text: !root.isCurrentVoice ? "\u25b6"
+                    : voice.loading ? "\u2193"
+                    : voice.playing ? "\u275a\u275a" : "\u25b6"
+                color: Theme.textOnAccent
+                font.pixelSize: voice.playing && root.isCurrentVoice ? 11 : 15
+            }
+
+            TapHandler {
+                onTapped: voice.toggle(root.fileId, messages.chatId, root.messageId)
+            }
+        }
+
+        Column {
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 4
+
+            Row {
+                id: bars
+                height: 22
+                spacing: 2
+
+                Repeater {
+                    model: root.waveform
+                    Rectangle {
+                        required property real modelData
+                        required property int index
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: 2
+                        height: Math.max(3, modelData * bars.height)
+                        radius: 1
+                        color: root.isCurrentVoice
+                               && index / root.waveform.length < voice.progress
+                               ? Theme.accent : Theme.textMuted
+                        opacity: color === Theme.accent ? 1 : 0.6
+                    }
+                }
+
+                TapHandler {
+                    onTapped: point => {
+                        if (root.isCurrentVoice)
+                            voice.seek(point.position.x / bars.width)
+                    }
+                }
+            }
+
+            Text {
+                text: root.isCurrentVoice && (voice.playing || voice.progress > 0)
+                      ? root.clock(voice.positionSeconds) : root.duration
+                color: Theme.textMuted
+                font.pixelSize: 11
+            }
+        }
+    }
+}
