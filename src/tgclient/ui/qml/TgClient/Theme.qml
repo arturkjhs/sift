@@ -21,6 +21,11 @@ QtObject {
     readonly property color danger: dark ? "#F07A6E" : "#C2412F"
     readonly property color field: dark ? "#232932" : "#FFFFFF"
     readonly property color fieldBorder: dark ? "#353C46" : "#CDD3DA"
+    // Menus and popups float above everything: a touch lighter than the sidebar in dark mode.
+    readonly property color popup: dark ? "#232932" : "#FFFFFF"
+    readonly property color popupBorder: dark ? "#323A45" : "#E1E5EA"
+    readonly property color shadow: dark ? "#66000000" : "#22000000"
+    readonly property color flash: dark ? "#403FB295" : "#330E7C66"   // jumped-to message
 
     readonly property color bubbleIn: dark ? "#232A33" : "#FFFFFF"
     readonly property color bubbleOut: dark ? "#1D4239" : "#D8EFE7"

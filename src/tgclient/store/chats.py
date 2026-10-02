@@ -76,6 +76,7 @@ class Chat:
     mute_for: int = 0
     use_default_mute_for: bool = True
     last_read_outbox_message_id: int = 0
+    last_read_inbox_message_id: int = 0
 
 
 @dataclass
@@ -226,6 +227,7 @@ class ChatStore:
             unread_mention_count=raw.get("unread_mention_count", 0),
             last_message=raw.get("last_message"),
             last_read_outbox_message_id=raw.get("last_read_outbox_message_id", 0),
+            last_read_inbox_message_id=raw.get("last_read_inbox_message_id", 0),
         )
         self.chats[chat.id] = chat
         self._set_photo(chat, raw.get("photo"))
@@ -262,9 +264,12 @@ class ChatStore:
         )
 
     def _on_read_inbox(self, event: Event) -> None:
-        self._update_chat(
-            event["chat_id"], lambda c: setattr(c, "unread_count", event["unread_count"])
-        )
+        def apply(chat: Chat) -> None:
+            chat.unread_count = event["unread_count"]
+            chat.last_read_inbox_message_id = event.get(
+                "last_read_inbox_message_id", chat.last_read_inbox_message_id)
+
+        self._update_chat(event["chat_id"], apply)
 
     def _on_read_outbox(self, event: Event) -> None:
         self._update_chat(

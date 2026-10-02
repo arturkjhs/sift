@@ -75,3 +75,23 @@ class RichTextTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SummaryMarkdownTest(unittest.TestCase):
+    def test_lists_inline_and_links(self) -> None:
+        from tgclient.store.markdown import markdown_to_html
+
+        palette = Palette(link="#123456")
+        out = markdown_to_html(
+            "## Plans\n- **Friday** at `5pm` [10:02](tgc://message/3)\n  - *maybe* <b>\n"
+            "1. first\n\nplain [x](javascript:alert) text", palette)
+        self.assertIn("<b>Plans</b>", out)
+        self.assertIn("•&nbsp;&nbsp;<b>Friday</b>", out)
+        self.assertIn('href="tgc://message/3"', out)
+        self.assertIn("color:#123456", out)
+        self.assertIn("margin-left:32px", out)  # nested bullet
+        self.assertIn("<i>maybe</i> &lt;b&gt;", out)
+        self.assertIn("1.&nbsp;&nbsp;first", out)
+        self.assertNotIn("javascript", out)
+        self.assertIn("plain x text", out)
+        self.assertIn("background-color", out)

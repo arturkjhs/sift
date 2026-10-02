@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import queue
 from collections.abc import Callable
 from typing import Any
+
+import httpx
 
 Responder = Callable[[dict[str, Any]], list[dict[str, Any]]]
 
@@ -33,6 +36,77 @@ class FakeLib:
             return self._queue.get(timeout=min(timeout, 0.05))
         except queue.Empty:
             return None
+
+
+class FakeRouter:
+    """httpx transport standing in for OpenRouter: records requests, replies from a script."""
+
+    def __init__(self, reply: str = "ok", status: int = 200) -> None:
+        self.reply = reply
+        self.status = status
+        self.requests: list[dict[str, Any]] = []
+        self.headers: list[httpx.Headers] = []
+        self.key_checks: list[str] = []
+        self.valid_key = "sk-test"
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":  # /key: checking an API key
+            self.key_checks.append(request.headers.get("authorization", ""))
+            if request.headers.get("authorization") != f"Bearer {self.valid_key}":
+                return httpx.Response(401, json={"error": {"message": "No auth credentials"}})
+            return httpx.Response(200, json={"data": {"label": "test", "usage": 0}})
+        self.requests.append(json.loads(request.content))
+        self.headers.append(request.headers)
+        if self.status != 200:
+            return httpx.Response(self.status, json={"error": {"message": "nope"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": self.reply}}]})
+
+    def client(self, key: str = "sk-test") -> Any:
+        from tgclient.services.openrouter import OpenRouter
+
+        return OpenRouter(key, transport=httpx.MockTransport(self))
+
+
+class FakeEmbedder:
+    """Deterministic stand-in for the local embedding model: words of the same "concept"
+    (across languages) share a dimension, any other word gets a hashed one."""
+
+    CONCEPTS: tuple[frozenset[str], ...] = (
+        frozenset({"meet", "meeting", "встреча", "встречаемся", "собираемся", "sraz"}),
+        frozenset({"keys", "key", "ключи", "ключ", "klíče", "klíč"}),
+        frozenset({"ill", "sick", "заболел", "болею", "nemocný"}),
+    )
+    DIM = 64
+
+    def __init__(self, model: str = "fake/embedder") -> None:
+        self.model = model
+        self.loaded = False
+
+    def load(self) -> None:
+        self.loaded = True
+
+    def _vector(self, text: str) -> Any:
+        import re
+        import zlib
+
+        import numpy as np
+
+        vector = np.zeros(self.DIM, dtype=np.float32)
+        for word in re.findall(r"\w+", text.lower()):
+            concept = next((i for i, c in enumerate(self.CONCEPTS) if word in c), None)
+            index = concept if concept is not None else (
+                len(self.CONCEPTS) + zlib.crc32(word.encode()) % (self.DIM - len(self.CONCEPTS)))
+            vector[index] += 1.0
+        norm = float(np.linalg.norm(vector)) or 1.0
+        return vector / norm
+
+    def embed_passages(self, texts: list[str]) -> Any:
+        import numpy as np
+
+        return np.stack([self._vector(t) for t in texts])
+
+    def embed_query(self, text: str) -> Any:
+        return self._vector(text)
 
 
 def ok(req: dict[str, Any], **fields: Any) -> dict[str, Any]:

@@ -139,8 +139,13 @@ def message_time(chat: Chat, now: datetime | None = None) -> str:
     message = chat.last_message
     if not message or not message.get("date"):
         return ""
+    return short_time(message["date"], now)
+
+
+def short_time(timestamp: int, now: datetime | None = None) -> str:
+    """Today: 14:05; this week: Mon; this year: 03.02; older: 03.02.24."""
     # Display in the user's local time zone on purpose.
-    when = datetime.fromtimestamp(message["date"])  # noqa: DTZ006
+    when = datetime.fromtimestamp(timestamp)  # noqa: DTZ006
     now = now or datetime.now()  # noqa: DTZ005
     if when.date() == now.date():
         return when.strftime("%H:%M")

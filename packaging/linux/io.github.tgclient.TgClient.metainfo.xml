@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.tgclient.TgClient</id>
+  <name>tgclient</name>
+  <summary>Unofficial Telegram client with summaries and search by meaning</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>LicenseRef-proprietary</project_license>
+  <description>
+    <p>A desktop client for Telegram built on TDLib and Qt, with optional AI features:
+      chat and person summaries with links to the source messages, voice message
+      transcription, and local search by meaning across languages.</p>
+    <p>AI features are off by default and enabled per chat. Secret chats are never sent
+      anywhere.</p>
+  </description>
+  <launchable type="desktop-id">io.github.tgclient.TgClient.desktop</launchable>
+  <content_rating type="oars-1.1">
+    <content_attribute id="social-chat">intense</content_attribute>
+    <content_attribute id="social-info">moderate</content_attribute>
+  </content_rating>
+  <releases>
+    <release version="0.1.0" date="2026-10-01"/>
+  </releases>
+</component>

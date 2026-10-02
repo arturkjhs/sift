@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=tgclient
+GenericName=Messenger
+Comment=Unofficial Telegram client with summaries and search by meaning
+Exec=tgclient
+Icon=io.github.tgclient.TgClient
+Terminal=false
+Categories=Network;InstantMessaging;Chat;
+Keywords=chat;messenger;
+StartupWMClass=tgclient

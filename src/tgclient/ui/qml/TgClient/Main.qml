@@ -29,6 +29,12 @@ ApplicationWindow {
 
     Component {
         id: mainView
-        MainView {}
+        MainView {
+            onSettingsRequested: settingsDialog.open()
+        }
+    }
+
+    SettingsDialog {
+        id: settingsDialog
     }
 }

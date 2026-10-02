@@ -3,6 +3,10 @@
 TDLib embeds file objects in chats and messages, but those snapshots go stale; updateFile is the
 authority. So embedded objects are only *registered* (used if the file is unknown), while
 updateFile and downloadFile results *update*.
+
+A downloadFile response can be older than an updateFile that was dispatched before the awaiting
+coroutine resumed (typical for small cached files: "downloading" response, then "completed"
+update). The response is therefore applied only if no updateFile arrived since the request.
 """
 
 from __future__ import annotations
@@ -57,6 +61,7 @@ class FileManager:
         self._client = client
         self._files: dict[int, FileState] = {}
         self._requested: set[int] = set()
+        self._versions: dict[int, int] = {}  # file id -> number of updateFile events seen
         self._listeners: list[FileListener] = []
         # Tiny inline JPEG previews from TDLib, keyed by the file id they stand in for.
         self.minithumbnails: dict[int, bytes] = {}
@@ -105,18 +110,40 @@ class FileManager:
         self._requested.add(file_id)
         asyncio.ensure_future(self._download(file_id, priority))
 
+    async def fetch(self, file_id: int, priority: int = USER_PRIORITY,
+                    timeout: float = 120.0) -> str:
+        """Download a file if needed and return its local path. Raises TimeoutError."""
+        path = self.path(file_id)
+        if path:
+            return path
+        ready: asyncio.Future[str] = asyncio.get_running_loop().create_future()
+
+        def on_file(changed: int) -> None:
+            path = self.path(changed) if changed == file_id else None
+            if path and not ready.done():
+                ready.set_result(path)
+
+        unsubscribe = self.subscribe(on_file)
+        try:
+            self.download(file_id, priority)
+            return await asyncio.wait_for(ready, timeout)
+        finally:
+            unsubscribe()
+
     def cancel(self, file_id: int) -> None:
         self._requested.discard(file_id)
         asyncio.ensure_future(self._send_quietly(
             {"@type": "cancelDownloadFile", "file_id": file_id, "only_if_pending": False}))
 
     async def _download(self, file_id: int, priority: int) -> None:
+        version = self._versions.get(file_id, 0)
         try:
             result = await self._client.send({
                 "@type": "downloadFile", "file_id": file_id, "priority": priority,
                 "offset": 0, "limit": 0, "synchronous": False,
             })
-            self.update(result)
+            if self._versions.get(file_id, 0) == version:
+                self.update(result)  # otherwise an updateFile already brought newer state
         except TdError as e:
             log.debug("downloadFile(%s) failed: %s", file_id, e)
             self._requested.discard(file_id)
@@ -128,7 +155,9 @@ class FileManager:
             log.debug("%s failed: %s", request["@type"], e)
 
     def _on_update_file(self, event: Event) -> None:
-        self.update(event["file"])
+        file = event["file"]
+        self._versions[file["id"]] = self._versions.get(file["id"], 0) + 1
+        self.update(file)
 
 
 def _state(file: dict[str, Any]) -> FileState:

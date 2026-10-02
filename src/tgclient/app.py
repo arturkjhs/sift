@@ -9,19 +9,32 @@ from collections.abc import Callable
 from pathlib import Path
 
 import qasync
-from PySide6.QtGui import QGuiApplication
+from PySide6.QtGui import QGuiApplication, QIcon
 from PySide6.QtQml import QQmlApplicationEngine
 
-from .config import APP_NAME, Settings, load_settings
+from .config import APP_ID, APP_NAME, Settings, build_info, load_settings
 from .models.chat_list import ChatListModel
+from .models.emoji import EmojiModel
 from .models.folders import FolderModel
 from .models.messages import MessageListModel
+from .models.search import SearchModel
+from .models.stickers import StickerModel
+from .services.ai import AiService
+from .services.ai_store import AiStore
+from .services.embeddings import Embedder, FastEmbedder, semantic_available
+from .services.openrouter import OpenRouter, mask_key
+from .services.search import SearchService
+from .services.search_index import SearchIndex
 from .store.chats import MAIN, ChatStore
+from .store.emoji import EmojiCatalog
 from .store.files import FileManager
+from .store.stickers import StickerStore
 from .store.users import UserStore
 from .td import AuthError, AuthFlow, TdError, TdHub, TdJson, TdlibParams
 from .td.client import TdLib
+from .ui.ai_controller import AiController
 from .ui.auth_controller import AuthController
+from .ui.icons import IconProvider
 from .ui.images import TdImageProvider
 from .ui.shell import ShellController
 from .ui.voice_player import VoicePlayer
@@ -29,12 +42,21 @@ from .ui.voice_player import VoicePlayer
 log = logging.getLogger(__name__)
 
 QML_IMPORT_DIR = Path(__file__).resolve().parent / "ui" / "qml"
+APP_ICON = Path(__file__).resolve().parent / "ui" / "app-icon.svg"
 
 
 class Session:
     """Everything that lives as long as one logged-in TDLib client."""
 
-    def __init__(self, settings: Settings, lib: TdLib | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        lib: TdLib | None = None,
+        ai_store: AiStore | None = None,
+        router: OpenRouter | None = None,
+        search_index: SearchIndex | None = None,
+        embedder: Embedder | None = None,
+    ) -> None:
         if lib is None:
             native = TdJson()
             native.execute(
@@ -46,7 +68,7 @@ class Session:
         # Subscribers must exist before the first request, otherwise early updates are lost.
         self.files = FileManager(self.client)
         self.chats = ChatStore(self.client, self.files)
-        self.users = UserStore(self.client)
+        self.users = UserStore(self.client, self.files)
         self.auth = AuthController()
         self.auth_flow = AuthFlow(
             self.client,
@@ -61,7 +83,27 @@ class Session:
         )
         self.chat_list = ChatListModel(self.chats, self.users)
         self.folders = FolderModel(self.chats)
-        self.messages = MessageListModel(self.client, self.chats, self.users)
+        if router is None and settings.openrouter_api_key:
+            router = OpenRouter(settings.openrouter_api_key)
+        self.ai_service = AiService(
+            self.client, self.chats, self.users,
+            ai_store or AiStore(settings.ai_db_path), router,
+            settings.summary_model, settings.transcription_model,
+            key_hint=mask_key(settings.openrouter_api_key) if router else "",
+            key_source=settings.openrouter_key_source if router else "",
+        )
+        self.ai = AiController(self.ai_service, self.chats)
+        self.messages = MessageListModel(self.client, self.chats, self.users, self.ai_service)
+        if embedder is None and semantic_available():
+            embedder = FastEmbedder(settings.embedding_model, settings.models_dir)
+        self.search_service = SearchService(
+            self.client, self.chats, self.users,
+            search_index or SearchIndex(settings.search_db_path), embedder, self.ai_service,
+        )
+        self.search = SearchModel(self.search_service, self.chats)
+        self.sticker_store = StickerStore(self.client, self.files)
+        self.stickers = StickerModel(self.sticker_store, self.files)
+        self.emojis = EmojiModel(EmojiCatalog(settings.data_dir / "recent-emoji.json"))
         self.voice = VoicePlayer(self.client, self.files)
 
     async def start(self) -> None:
@@ -76,9 +118,12 @@ class Session:
             return
         self.auth.set_ready()
         self.chat_list.setList(MAIN)
+        self.search_service.start()
 
     async def close(self) -> None:
         self.voice.stop()
+        await self.search_service.close()
+        await self.ai_service.close()
         await self.client.close()
         self.hub.stop()
 
@@ -95,8 +140,10 @@ def create_engine(
     engine.addImportPath(str(QML_IMPORT_DIR))
     images = TdImageProvider(session.files)
     engine.addImageProvider("tg", images)
+    icons = IconProvider()
+    engine.addImageProvider("icon", icons)
     # Context properties don't own their objects: keep Python refs alive as long as the engine.
-    engine._tgclient_refs = (shell, images)  # type: ignore[attr-defined]
+    engine._tgclient_refs = (shell, images, icons)  # type: ignore[attr-defined]
     context = engine.rootContext()
     context.setContextProperty("shell", shell)
     context.setContextProperty("auth", session.auth)
@@ -104,6 +151,10 @@ def create_engine(
     context.setContextProperty("folders", session.folders)
     context.setContextProperty("messages", session.messages)
     context.setContextProperty("voice", session.voice)
+    context.setContextProperty("ai", session.ai)
+    context.setContextProperty("search", session.search)
+    context.setContextProperty("emojis", session.emojis)
+    context.setContextProperty("stickers", session.stickers)
     engine.loadFromModule("TgClient", "Main")
     return engine
 
@@ -145,9 +196,18 @@ async def amain(app: QGuiApplication) -> int:
 
 def main() -> None:
     logging.basicConfig(format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if "--self-test" in sys.argv:
+        from .selftest import run
+
+        sys.exit(run())
+    if "--version" in sys.argv:
+        print(f"{APP_NAME} {build_info().get('VERSION', 'dev')}")
+        return
     app = QGuiApplication(sys.argv)
     app.setApplicationName(APP_NAME)
     app.setOrganizationName(APP_NAME)
+    app.setDesktopFileName(APP_ID)  # Wayland: matches the window to the .desktop entry
+    app.setWindowIcon(QIcon(str(APP_ICON)))
 
     loop = qasync.QEventLoop(app)
     asyncio.set_event_loop(loop)

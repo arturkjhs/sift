@@ -22,6 +22,8 @@ from PySide6.QtCore import (
 )
 from PySide6.QtGui import QDesktopServices, QFontDatabase, QGuiApplication
 
+from ..services.ai import AiService
+from ..services.summary import sender_key
 from ..store.chats import ChatStore
 from ..store.files import AUTO_PRIORITY, USER_PRIORITY, FileManager
 from ..store.format import (
@@ -52,8 +54,10 @@ class Role(IntEnum):
     IsService = auto()
     ServiceText = auto()
     SenderName = auto()
+    SenderKey = auto()
     SenderColor = auto()
     SenderInitials = auto()
+    SenderAvatar = auto()
     ShowSender = auto()
     GroupBottom = auto()
     ShowAvatar = auto()
@@ -78,9 +82,13 @@ class Role(IntEnum):
     Duration = auto()
     Waveform = auto()
     StickerEmoji = auto()
+    Transcript = auto()
+    TranscriptState = auto()
 
 
-MEDIA_ROLES = [Role.MediaSource, Role.FileInfo, Role.FileState, Role.FileProgress]
+# Roles that depend on file state (refreshed when a file of the message changes).
+MEDIA_ROLES = [Role.MediaSource, Role.FileInfo, Role.FileState, Role.FileProgress,
+               Role.SenderAvatar]
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 _AUTO_OPEN_KINDS = {"photo", "video", "animation", "videoNote"}
 
@@ -126,9 +134,11 @@ class MessageListModel(QAbstractListModel):
     chatChanged = Signal()
     loadingChanged = Signal()
     paletteChanged = Signal()
+    jumpReady = Signal(int)  # row of a message requested by jumpTo(), once it's loaded
 
     def __init__(
-        self, client: TdClient, chats: ChatStore, users: UserStore, parent: Any = None
+        self, client: TdClient, chats: ChatStore, users: UserStore,
+        ai: AiService | None = None, parent: Any = None,
     ) -> None:
         super().__init__(parent)
         self._client = client
@@ -147,6 +157,9 @@ class MessageListModel(QAbstractListModel):
         self._palette = Palette(mono=mono)
         self._time_color = "#00000000"
         chats.subscribe(self._on_chat_store)
+        self._ai = ai
+        if ai is not None:
+            ai.subscribe(self._on_ai)
 
     # --- properties -------------------------------------------------------------------------
 
@@ -269,6 +282,25 @@ class MessageListModel(QAbstractListModel):
     def rowOf(self, message_id: Any) -> int:
         return self._history.row_of(int(message_id)) if self._history else -1
 
+    @Slot("QVariant")
+    def jumpTo(self, message_id: Any) -> None:
+        """Scroll to a message, paging older history in first if needed (emits jumpReady)."""
+        history = self._history
+        message_id = int(message_id or 0)
+        if history is None or not message_id:
+            return
+        row = history.row_of(message_id)
+        if row >= 0:
+            self.jumpReady.emit(row)
+            return
+
+        async def load() -> None:
+            found = await history.load_until(message_id)
+            if found and history is self._history:
+                self.jumpReady.emit(history.row_of(message_id))
+
+        self._spawn(self._run_load(history, load()))
+
     @Slot("QVariant", result="QVariantMap")
     def replyPreview(self, message_id: Any) -> dict[str, str]:
         message = self._history.get(int(message_id or 0)) if self._history else None
@@ -282,7 +314,11 @@ class MessageListModel(QAbstractListModel):
         if message is None:
             return
         body = message_body(message.get("content", {}))
-        QGuiApplication.clipboard().setText((body or {}).get("text", ""))
+        text = (body or {}).get("text", "")
+        if not text and self._ai is not None and self._history is not None:
+            transcript = self._ai.transcript(self._history.chat_id, message["id"])
+            text = transcript.text if transcript and transcript.state == "done" else ""
+        QGuiApplication.clipboard().setText(text)
 
     @Slot("QVariant")
     def activateMedia(self, message_id: Any) -> None:
@@ -316,6 +352,26 @@ class MessageListModel(QAbstractListModel):
         path = self._files.path(int(file_id or 0))
         if path:  # TODO: select the file (Finder: `open -R`, Linux: org.freedesktop.FileManager1)
             QDesktopServices.openUrl(QUrl.fromLocalFile(str(_parent(path))))
+
+    @Slot("QVariantMap", "QVariant")
+    def sendSticker(self, sticker: dict[str, Any], reply_to: Any = 0) -> None:
+        history = self._history
+        file = (sticker or {}).get("sticker") or {}
+        if history is None or not file.get("id"):
+            return
+        content = {
+            "@type": "inputMessageSticker",
+            # Recent TDLib wraps the file in inputSticker (with its size).
+            "sticker": {
+                "@type": "inputSticker",
+                "sticker": {"@type": "inputFileId", "id": file["id"]},
+                "thumbnail": None,
+                "width": sticker.get("width", 512),
+                "height": sticker.get("height", 512),
+            },
+            "emoji": sticker.get("emoji", ""),
+        }
+        self._spawn(self._send_content(history.chat_id, content, int(reply_to or 0)))
 
     @Slot("QVariantList")
     def sendFiles(self, urls: list[Any]) -> None:
@@ -365,10 +421,14 @@ class MessageListModel(QAbstractListModel):
                 return f"{self._sender_name(message)} {content_preview(content)}".strip()
             case Role.SenderName:
                 return self._sender_name(message)
+            case Role.SenderKey:
+                return sender_key(message)
             case Role.SenderColor:
                 return abs(self._sender_key(message)) % AVATAR_COLORS
             case Role.SenderInitials:
                 return initials(self._sender_name(message))
+            case Role.SenderAvatar:
+                return self._sender_avatar(message)
             case Role.ShowSender:
                 return self._is_group_chat() and not message.get("is_outgoing") and not (
                     self._same_group(message, self._neighbor(row + 1)))
@@ -401,6 +461,12 @@ class MessageListModel(QAbstractListModel):
                 return self._short_text(reply)
             case Role.MediaLabel:
                 return "" if self._media(message) else media_label(content)
+            case Role.Transcript | Role.TranscriptState:
+                transcript = (self._ai.transcript(history.chat_id, message["id"])
+                              if self._ai else None)
+                if role == Role.Transcript:
+                    return transcript.text if transcript else ""
+                return transcript.state if transcript else ""
             case Role.DayLabel:
                 older = self._neighbor(row + 1)
                 if older is None:
@@ -521,6 +587,23 @@ class MessageListModel(QAbstractListModel):
             return chat.title if chat else ""
         return ""
 
+    def _sender_avatar(self, message: Message) -> str:
+        """Profile photo of the sender (user or chat); starts a small download when needed."""
+        sender = message.get("sender_id", {})
+        if sender.get("@type") == "messageSenderUser":
+            user = self._users.users.get(sender.get("user_id", 0))
+            file_id = user.photo_file_id if user else None
+        else:
+            chat = self._chats.chats.get(sender.get("chat_id", 0))
+            file_id = chat.photo_file_id if chat else None
+        if file_id is None:
+            return ""
+        self._file_messages.setdefault(file_id, set()).add(message["id"])
+        if self._files.path(file_id):
+            return f"image://tg/avatar/{file_id}"
+        self._files.download(file_id, AUTO_PRIORITY)
+        return ""
+
     def _short_text(self, message: Message) -> str:
         return " ".join(content_preview(message.get("content", {})).split())[:200]
 
@@ -597,17 +680,48 @@ class MessageListModel(QAbstractListModel):
                 index = self.index(row)
                 self.dataChanged.emit(index, index, MEDIA_ROLES)
 
+    def _on_ai(self, kind: str, payload: Any) -> None:
+        history = self._history
+        if kind != "transcript" or history is None:
+            return
+        chat_id, message_id = payload
+        row = history.row_of(message_id) if chat_id == history.chat_id else -1
+        if row >= 0:
+            index = self.index(row)
+            self.dataChanged.emit(index, index, [Role.Transcript, Role.TranscriptState])
+
     async def _send_file(self, chat_id: int, path: str) -> None:
         local = {"@type": "inputFileLocal", "path": path}
         if _suffix(path) in _IMAGE_EXTENSIONS and _suffix(path) != ".gif":
-            content: dict[str, Any] = {"@type": "inputMessagePhoto", "photo": local}
+            # Recent TDLib wraps the file in inputPhoto / inputDocument.
+            content: dict[str, Any] = {
+                "@type": "inputMessagePhoto",
+                "photo": {"@type": "inputPhoto", "photo": local},
+            }
         else:
-            content = {"@type": "inputMessageDocument", "document": local}
+            content = {
+                "@type": "inputMessageDocument",
+                "document": {"@type": "inputDocument", "document": local},
+            }
         try:
             message = await self._client.send(
                 {"@type": "sendMessage", "chat_id": chat_id, "input_message_content": content})
         except TdError as e:
             log.warning("Sending %s failed: %s", path, e)
+            return
+        history = self._history
+        if history and history.chat_id == chat_id and history.get(message["id"]) is None:
+            history.add(message)
+
+    async def _send_content(self, chat_id: int, content: dict[str, Any], reply_to: int) -> None:
+        request: dict[str, Any] = {
+            "@type": "sendMessage", "chat_id": chat_id, "input_message_content": content}
+        if reply_to:
+            request["reply_to"] = {"@type": "inputMessageReplyToMessage", "message_id": reply_to}
+        try:
+            message = await self._client.send(request)
+        except TdError as e:
+            log.warning("Sending %s failed: %s", content["@type"], e)
             return
         history = self._history
         if history and history.chat_id == chat_id and history.get(message["id"]) is None:

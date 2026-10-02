@@ -55,7 +55,9 @@ class Server:
             case "parseMarkdown":
                 return [{**req["text"], "@extra": req["@extra"]}]
             case "sendMessage":
-                sent = msg(10_000, req["input_message_content"]["text"]["text"], out=True,
+                content = req["input_message_content"]
+                text = content["text"]["text"] if "text" in content else "file"
+                sent = msg(10_000, text, out=True,
                            sending_state={"@type": "messageSendingStatePending"})
                 return [{"@type": "updateNewMessage", "message": sent},
                         {**sent, "@extra": req["@extra"]}]
@@ -148,6 +150,31 @@ class ChatHistoryTest(HistoryCase):
         self.assertEqual(history.reply_message(newest)["id"], 3)
 
 
+class JumpTest(HistoryCase):
+    async def test_load_until_pages_older_history(self) -> None:
+        history = ChatHistory(self.client, CHAT)
+        await history.load_initial()
+        self.assertLess(history.row_of(10), 0)
+        self.assertTrue(await history.load_until(10))
+        self.assertGreaterEqual(history.row_of(10), 0)
+        self.assertFalse(await history.load_until(10_000))  # newer than anything: not paged
+
+    async def test_jump_to_unloaded_message(self) -> None:
+        qt_app()
+        from tgclient.models.messages import MessageListModel
+
+        await self.push(new_chat(CHAT, "Friends", 1))
+        model = MessageListModel(self.client, self.chats, self.users)
+        rows: list[int] = []
+        model.jumpReady.connect(rows.append)
+        model.open(CHAT)
+        await wait_until(lambda: model.rowCount() >= ChatHistory.PAGE and not model.loading)
+        model.jumpTo(3)
+        await wait_until(lambda: bool(rows))
+        self.assertEqual(rows, [model.rowOf(3)])
+        self.assertEqual(rows[0], 117)  # ids 120..1, newest first
+
+
 class MessageModelTest(HistoryCase):
     total = 6
 
@@ -210,6 +237,19 @@ class MessageModelTest(HistoryCase):
         self.assertEqual(sent["reply_to"], {"@type": "inputMessageReplyToMessage", "message_id": 6})
         self.assertTrue(any(r["@type"] == "parseMarkdown" for r in self.lib.sent))
         self.assertEqual(self.role(0, self.Role.Status), "pending")
+
+    async def test_send_files_wraps_input_file(self) -> None:
+        await self.open_loaded()
+        self.model.sendFiles(["/tmp/shot.png", "/tmp/notes.pdf"])
+        await wait_until(lambda: sum(r["@type"] == "sendMessage" for r in self.lib.sent) == 2)
+        photo, doc = (r["input_message_content"] for r in self.lib.sent
+                      if r["@type"] == "sendMessage")
+        local = {"@type": "inputFileLocal", "path": "/tmp/shot.png"}
+        self.assertEqual(photo["@type"], "inputMessagePhoto")
+        self.assertEqual(photo["photo"], {"@type": "inputPhoto", "photo": local})
+        self.assertEqual(doc["@type"], "inputMessageDocument")
+        self.assertEqual(doc["document"]["@type"], "inputDocument")
+        self.assertEqual(doc["document"]["document"]["path"], "/tmp/notes.pdf")
 
     async def test_mark_viewed_only_incoming_once(self) -> None:
         await self.open_loaded()

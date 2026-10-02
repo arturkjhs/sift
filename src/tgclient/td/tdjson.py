@@ -24,9 +24,13 @@ def _library_candidates() -> list[str]:
         return [env]
 
     name = "libtdjson.dylib" if sys.platform == "darwin" else "libtdjson.so"
+    candidates = []
+    bundle = getattr(sys, "_MEIPASS", None)  # packaged app (PyInstaller): shipped next to Qt
+    if bundle:  # versioned file name, e.g. libtdjson.1.8.67.dylib / libtdjson.so.1.8.67
+        candidates += sorted(str(p) for p in (Path(bundle) / "tdlib").glob("libtdjson*"))
     # src/tgclient/td/tdjson.py -> repo root is three levels above the package dir
     repo_root = Path(__file__).resolve().parents[3]
-    candidates = [str(repo_root / "vendor" / "tdlib" / "lib" / name)]
+    candidates.append(str(repo_root / "vendor" / "tdlib" / "lib" / name))
 
     found = ctypes.util.find_library("tdjson")
     if found:

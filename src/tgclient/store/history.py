@@ -149,6 +149,20 @@ class ChatHistory:
         finally:
             self.loading = False
 
+    async def load_until(self, message_id: int, max_pages: int = 40) -> bool:
+        """Page older history until `message_id` is loaded. Returns whether it is."""
+        pages = 0
+        while self.row_of(message_id) < 0:
+            if self._disposed or self.reached_start or pages >= max_pages or (
+                    self.messages and self.messages[-1]["id"] < message_id):
+                return False
+            if self.loading:  # a page requested by the view is in flight
+                await asyncio.sleep(0.02)
+                continue
+            pages += 1
+            await (self.load_older() if self.messages else self.load_initial())
+        return True
+
     async def _fetch(self, from_id: int) -> list[Message]:
         try:
             result = await self._client.send({

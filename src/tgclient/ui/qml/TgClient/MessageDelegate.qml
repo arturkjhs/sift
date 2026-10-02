@@ -10,8 +10,10 @@ Item {
     required property bool isService
     required property string serviceText
     required property string senderName
+    required property string senderKey
     required property int senderColor
     required property string senderInitials
+    required property string senderAvatar
     required property bool showSender
     required property bool groupBottom
     required property bool showAvatar
@@ -36,13 +38,17 @@ Item {
     required property string duration
     required property var waveform
     required property string stickerEmoji
+    required property string transcript
+    required property string transcriptState
 
     property bool isGroupChat: false
+    property bool flashed: false   // just jumped to: briefly tinted
 
     signal replyRequested(var messageId)
     signal jumpRequested(var messageId)
     signal menuRequested(var messageId)
     signal linkActivated(string link)
+    signal senderClicked(string senderKey, string senderName, var messageId)
 
     readonly property real sidePadding: 16
     readonly property real avatarSpace: isGroupChat && !isOutgoing ? 40 : 0
@@ -52,9 +58,13 @@ Item {
     readonly property bool visualMedia: ["photo", "video", "animation", "sticker", "videoNote"]
                                         .indexOf(mediaKind) >= 0
     readonly property bool timeOnMedia: visualMedia && html === ""
-    // Voice and file cards leave room on their right for the time instead of an extra line.
+    // Voice and file cards leave room on their right for the time instead of an extra line
+    // (a voice transcript below the player takes that line, so the time moves under it).
+    readonly property bool showTranscript: mediaKind === "voice"
+                                           && (transcriptState !== "" || ai.enabled)
+    readonly property bool longTranscript: transcriptState === "done" || transcriptState === "error"
     readonly property bool timeBesideMedia: ["voice", "document", "audio"].indexOf(mediaKind) >= 0
-                                           && html === ""
+                                           && html === "" && !(showTranscript && longTranscript)
     readonly property bool bare: (mediaKind === "sticker" || mediaKind === "videoNote")
                                  && html === "" && replyToId === 0 && !showSender
     readonly property real bubblePadding: bare ? 0 : timeOnMedia && !showSender && replyToId === 0 ? 4 : 10
@@ -129,8 +139,14 @@ Item {
                 x: root.sidePadding
                 anchors.bottom: bubble.bottom
                 size: 32
+                avatarSource: root.senderAvatar
                 initials: root.senderInitials
                 colorIndex: root.senderColor
+
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler {
+                    onTapped: root.senderClicked(root.senderKey, root.senderName, root.messageId)
+                }
             }
 
             Rectangle {
@@ -143,6 +159,8 @@ Item {
                     media.visible ? media.naturalWidth
                                     + (root.timeBesideMedia ? timeRow.implicitWidth + 12 : 0) : 0,
                     body.visible ? body.implicitWidth : 0,
+                    transcriptText.visible ? transcriptText.implicitWidth
+                        + (root.timeBesideMedia ? timeRow.implicitWidth + 12 : 0) : 0,
                     timeRow.implicitWidth)
 
                 x: root.isOutgoing ? parent.width - width - root.sidePadding
@@ -180,6 +198,12 @@ Item {
                         color: Theme.avatarColors[root.senderColor % Theme.avatarColors.length]
                         font.pixelSize: Theme.fontBody
                         font.weight: Font.DemiBold
+
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        TapHandler {
+                            onTapped: root.senderClicked(root.senderKey, root.senderName,
+                                                         root.messageId)
+                        }
                     }
 
                     Rectangle {
@@ -258,6 +282,37 @@ Item {
                         onActivated: messages.activateMedia(root.messageId)
                     }
 
+                    // Voice transcript: "Transcribe" link, progress, the text, or an error to retry.
+                    Text {
+                        id: transcriptText
+                        readonly property bool actionable: root.transcriptState === ""
+                                                           || root.transcriptState === "error"
+                        visible: root.showTranscript
+                        width: parent.width
+                        text: root.transcriptState === "done" ? root.transcript
+                            : root.transcriptState === "pending" ? qsTr("Transcribing\u2026")
+                            : root.transcriptState === "error"
+                              ? root.transcript + " \u00b7 " + qsTr("Retry")
+                            : qsTr("Transcribe")
+                        textFormat: Text.PlainText
+                        wrapMode: Text.Wrap
+                        color: root.transcriptState === "done" ? Theme.text
+                             : root.transcriptState === "error" ? Theme.danger : Theme.accent
+                        font.pixelSize: root.transcriptState === "done" ? Theme.fontBody
+                                                                        : Theme.fontSmall
+                        font.weight: actionable && root.transcriptState === ""
+                                     ? Font.DemiBold : Font.Normal
+
+                        HoverHandler {
+                            cursorShape: transcriptText.actionable ? Qt.PointingHandCursor
+                                                                   : Qt.ArrowCursor
+                        }
+                        TapHandler {
+                            enabled: transcriptText.actionable && ai.enabled
+                            onTapped: ai.transcribe(root.messageId)
+                        }
+                    }
+
                     TextEdit {
                         id: body
                         visible: root.html !== ""
@@ -285,6 +340,15 @@ Item {
                         width: 1
                         height: mediaText.visible ? 0 : timeRow.height
                     }
+                }
+
+                Rectangle {  // flash after a jump (search result, quote, summary link)
+                    anchors.fill: parent
+                    radius: parent.radius
+                    color: Theme.flash
+                    opacity: root.flashed ? 1 : 0
+                    visible: opacity > 0
+                    Behavior on opacity { NumberAnimation { duration: 400 } }
                 }
 
                 Rectangle {  // backdrop for the time drawn over a photo or sticker

@@ -1,0 +1,43 @@
+# Flatpak of the PyInstaller build (dist/tgclient-linux-<arch>.tar.gz from build_linux.sh):
+# the same self-tested Qt/Python bundle, in the Flatpak sandbox.
+#   flatpak-builder --user --install --force-clean build/flatpak \
+#     packaging/flatpak/io.github.tgclient.TgClient.yml
+id: io.github.tgclient.TgClient
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+command: tgclient
+finish-args:
+  - --share=network
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --socket=pulseaudio          # voice messages
+  - --filesystem=xdg-download    # downloaded files; other files go through the file portal
+  - --env=QT_QPA_PLATFORM=wayland;xcb
+modules:
+  - name: tgclient
+    buildsystem: simple
+    sources:
+      - type: archive
+        path: ../../dist/tgclient-linux-x86_64.tar.gz
+        dest: tgclient
+        only-arches: [x86_64]
+      - type: archive
+        path: ../../dist/tgclient-linux-aarch64.tar.gz
+        dest: tgclient
+        only-arches: [aarch64]
+      - type: file
+        path: ../linux/io.github.tgclient.TgClient.desktop
+      - type: file
+        path: ../linux/io.github.tgclient.TgClient.metainfo.xml
+      - type: file
+        path: ../../src/tgclient/ui/app-icon.svg
+    build-commands:
+      - mkdir -p /app/lib /app/bin
+      - cp -a tgclient /app/lib/tgclient
+      - ln -s /app/lib/tgclient/tgclient /app/bin/tgclient
+      - install -Dm644 io.github.tgclient.TgClient.desktop -t /app/share/applications
+      - install -Dm644 io.github.tgclient.TgClient.metainfo.xml -t /app/share/metainfo
+      - install -Dm644 app-icon.svg /app/share/icons/hicolor/scalable/apps/io.github.tgclient.TgClient.svg

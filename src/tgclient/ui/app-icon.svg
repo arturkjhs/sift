@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- tgclient app icon: drawn for this project (not Telegram's logo). -->
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#17A385"/>
+      <stop offset="1" stop-color="#0B6655"/>
+    </linearGradient>
+  </defs>
+  <!-- macOS-style canvas: 824px rounded square with 100px margins -->
+  <rect x="100" y="100" width="824" height="824" rx="186" fill="url(#bg)"/>
+  <!-- back bubble -->
+  <path d="M430 262h264c55 0 100 45 100 100v144c0 55-45 100-100 100h-18l4 66-78-66H430
+           c-55 0-100-45-100-100V362c0-55 45-100 100-100z" fill="#FFFFFF" fill-opacity="0.38"/>
+  <!-- front bubble -->
+  <path d="M330 402h276c55 0 100 45 100 100v150c0 55-45 100-100 100H446l-96 80 6-80h-26
+           c-55 0-100-45-100-100V502c0-55 45-100 100-100z" fill="#FFFFFF"/>
+  <!-- sparkle -->
+  <path d="M468 488l22 62 62 22-62 22-22 62-22-62-62-22 62-22z" fill="#0E7C66"/>
+  <circle cx="588" cy="650" r="20" fill="#0E7C66" fill-opacity="0.55"/>
+</svg>

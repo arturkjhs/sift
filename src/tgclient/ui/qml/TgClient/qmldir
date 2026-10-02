@@ -10,3 +10,15 @@ MessageView 1.0 MessageView.qml
 MessageDelegate 1.0 MessageDelegate.qml
 Composer 1.0 Composer.qml
 MediaContent 1.0 MediaContent.qml
+SummaryPanel 1.0 SummaryPanel.qml
+SettingsDialog 1.0 SettingsDialog.qml
+PillButton 1.0 PillButton.qml
+IconButton 1.0 IconButton.qml
+Icon 1.0 Icon.qml
+AppMenu 1.0 AppMenu.qml
+AppMenuItem 1.0 AppMenuItem.qml
+AppMenuSeparator 1.0 AppMenuSeparator.qml
+ToggleSwitch 1.0 ToggleSwitch.qml
+SearchBox 1.0 SearchBox.qml
+SearchResultDelegate 1.0 SearchResultDelegate.qml
+EmojiStickerPicker 1.0 EmojiStickerPicker.qml

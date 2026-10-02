@@ -21,6 +21,10 @@ Rectangle {
 
     function focusInput() { input.forceActiveFocus() }
 
+    function insertText(text) {
+        input.insert(input.cursorPosition, text)
+    }
+
     color: Theme.sidebar
     implicitHeight: layout.implicitHeight + 16
 
@@ -109,6 +113,7 @@ Rectangle {
 
                 TextArea {
                     id: input
+                    objectName: "composerInput"
                     placeholderText: qsTr("Write a message")
                     wrapMode: TextArea.Wrap
                     color: Theme.text
@@ -129,6 +134,30 @@ Rectangle {
                             event.accepted = true
                         }
                     }
+                }
+            }
+
+            IconButton {
+                id: emojiButton
+                objectName: "emojiButton"
+                Layout.alignment: Qt.AlignBottom
+                Layout.bottomMargin: 5
+                iconName: "emoji"
+                glyphSize: 19
+                Accessible.name: qsTr("Emoji and stickers")
+                onClicked: picker.opened ? picker.close() : picker.open()
+
+                EmojiStickerPicker {
+                    id: picker
+                    x: emojiButton.width - width + 8
+                    y: -height - 14
+                    onEmojiPicked: emoji => root.insertText(emoji)
+                    onStickerPicked: sticker => {
+                        messages.sendSticker(sticker, root.replyToId)
+                        picker.close()
+                        root.sent()
+                    }
+                    onClosed: input.forceActiveFocus()
                 }
             }
 

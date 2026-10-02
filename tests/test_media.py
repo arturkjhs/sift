@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import time
 import unittest
@@ -141,15 +142,35 @@ class FileManagerTest(FileTestCase):
         self.assertEqual(self.files.get(5).progress, 1.0)
 
 
+class StaleResponseTest(FileTestCase):
+    async def test_completed_update_beats_older_download_response(self) -> None:
+        """Real TDLib order for small cached files: the downloadFile response says
+        "downloading", but an updateFile "completed" is dispatched before our coroutine resumes.
+        The older response must not erase the finished download (avatars never showed)."""
+
+        def responder(req: dict[str, Any]) -> list[dict[str, Any]]:
+            if req["@type"] == "downloadFile":
+                return [{**file(req["file_id"], downloading=True), "@extra": req["@extra"]},
+                        {"@type": "updateFile", "file": file(req["file_id"], path="/a.jpg",
+                                                             done=True, downloaded=1000)}]
+            return [ok(req)]
+
+        self.lib._responder = responder
+        self.assertEqual(await self.files.fetch(9), "/a.jpg")
+        await asyncio.sleep(0.05)  # let the download coroutine finish with the stale response
+        self.assertEqual(self.files.path(9), "/a.jpg")
+
+
 class MediaRolesTest(FileTestCase):
     async def asyncSetUp(self) -> None:
         await super().asyncSetUp()
         qt_app()
         from PySide6.QtTest import QAbstractItemModelTester
 
-        from tgclient.models.messages import MessageListModel, Role
+        from tgclient.models.messages import MEDIA_ROLES, MessageListModel, Role
 
         self.Role = Role
+        self.media_roles = [int(r) for r in MEDIA_ROLES]
         now = int(time.time())
 
         def msg(mid: int, content: dict[str, Any]) -> dict[str, Any]:
@@ -167,8 +188,11 @@ class MediaRolesTest(FileTestCase):
             msg(1, photo_content()),
         ]
         self.chats = ChatStore(self.client, self.files)
-        await self.push(new_chat(CHAT, "Chat", 1))
-        self.model = MessageListModel(self.client, self.chats, UserStore(self.client))
+        self.users = UserStore(self.client, self.files)
+        await self.push(new_chat(CHAT, "Chat", 1), {"@type": "updateUser", "user": {
+            "id": 5, "first_name": "Olena", "profile_photo": {
+                "@type": "profilePhoto", "id": "1", "small": file(80), "big": file(81)}}})
+        self.model = MessageListModel(self.client, self.chats, self.users)
         self.tester = QAbstractItemModelTester(
             self.model, QAbstractItemModelTester.FailureReportingMode.Fatal)
         self.model.open(CHAT)
@@ -189,6 +213,17 @@ class MediaRolesTest(FileTestCase):
         await self.push({"@type": "updateFile", "file": file(12, path="/p.jpg", done=True)})
         self.assertIn(2, changed)
         self.assertEqual(self.role(2, self.Role.MediaSource), "image://tg/media/12")
+
+    async def test_sender_avatar_downloads_lazily(self) -> None:
+        self.assertEqual(self.role(0, self.Role.SenderAvatar), "")
+        await wait_until(lambda: any(d["file_id"] == 80 for d in self.downloads))
+        changed: list[tuple[int, list[int]]] = []
+        self.model.dataChanged.connect(
+            lambda top, _bottom, roles: changed.append((top.row(), list(roles))))
+        await self.push({"@type": "updateFile", "file": file(80, path="/me.jpg", done=True)})
+        self.assertIn((0, self.media_roles),
+                      [(row, [int(x) for x in roles]) for row, roles in changed])
+        self.assertEqual(self.role(0, self.Role.SenderAvatar), "image://tg/avatar/80")
 
     async def test_document_click_downloads_then_cancels(self) -> None:
         self.assertEqual(self.role(0, self.Role.FileName), "report.pdf")
