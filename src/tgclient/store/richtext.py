@@ -9,8 +9,13 @@ clipped to the enclosing entity instead of producing broken markup.
 from __future__ import annotations
 
 import html
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
+
+# Custom emoji id -> image URL, or None while unknown (the fallback emoji text is shown then).
+CustomEmoji = Callable[[str], str | None]
+EMOJI_SIZE = 20
 
 
 @dataclass(frozen=True)
@@ -27,6 +32,7 @@ class _Span:
     end: int
     open: str
     close: str
+    replace: bool = False  # the span's text is replaced by `open` (custom emoji image)
 
 
 def utf16_index_map(text: str) -> list[int]:
@@ -91,8 +97,10 @@ def _tags(entity_type: dict[str, Any], segment: str, palette: Palette) -> tuple[
     return None  # custom emoji etc.: plain text (the fallback emoji is in the text)
 
 
-def formatted_to_html(formatted: dict[str, Any] | None, palette: Palette, tail: str = "") -> str:
-    """Return HTML for a formattedText. `tail` is raw HTML appended at the end (time spacer)."""
+def formatted_to_html(formatted: dict[str, Any] | None, palette: Palette, tail: str = "",
+                      custom_emoji: CustomEmoji | None = None) -> str:
+    """Return HTML for a formattedText. `tail` is raw HTML appended at the end (time spacer).
+    `custom_emoji` turns custom emoji entities into inline images when their URL is known."""
     text = (formatted or {}).get("text", "")
     if not text and not tail:
         return ""
@@ -108,7 +116,15 @@ def formatted_to_html(formatted: dict[str, Any] | None, palette: Palette, tail: 
         start, end = index[offset], index[min(offset + length, limit)]
         if start >= end:
             continue
-        tags = _tags(entity.get("type", {}), text[start:end], palette)
+        entity_type = entity.get("type", {})
+        if entity_type.get("@type") == "textEntityTypeCustomEmoji" and custom_emoji:
+            url = custom_emoji(str(entity_type.get("custom_emoji_id", "")))
+            if url:
+                image = (f'<img src="{_attr(url)}" width="{EMOJI_SIZE}" height="{EMOJI_SIZE}" '
+                         f'style="vertical-align:middle">')
+                spans.append(_Span(start, end, image, "", replace=True))
+            continue
+        tags = _tags(entity_type, text[start:end], palette)
         if tags:
             spans.append(_Span(start, end, *tags))
     spans.sort(key=lambda s: (s.start, -s.end))
@@ -118,17 +134,23 @@ def formatted_to_html(formatted: dict[str, Any] | None, palette: Palette, tail: 
     stack: list[_Span] = []
     position = 0
     next_span = 0
+    replaced = 0  # inside a replaced span: its text isn't output
     for boundary in boundaries:
-        out.append(html.escape(text[position:boundary], quote=False))
+        if not replaced:
+            out.append(html.escape(text[position:boundary], quote=False))
         position = boundary
         while stack and stack[-1].end <= boundary:
-            out.append(stack.pop().close)
+            closed = stack.pop()
+            replaced -= closed.replace
+            out.append(closed.close)
         while next_span < len(spans) and spans[next_span].start == boundary:
             span = spans[next_span]
             next_span += 1
             if stack and span.end > stack[-1].end:
                 span.end = stack[-1].end  # clip a partial overlap
-            out.append(span.open)
+            if not replaced:
+                out.append(span.open)
+            replaced += span.replace
             stack.append(span)
     while stack:
         out.append(stack.pop().close)

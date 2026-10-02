@@ -64,6 +64,7 @@ class ChatHistory:
             "updateMessageSendFailed": self._on_send_result,
             "updateMessageContent": self._on_content,
             "updateMessageEdited": self._on_edited,
+            "updateMessageInteractionInfo": self._on_interaction_info,
             "updateDeleteMessages": self._on_delete,
         }
         self._unsubscribe = [client.on(t, h) for t, h in handlers.items()]
@@ -275,6 +276,15 @@ class ChatHistory:
         row = self.row_of(event["message_id"])
         if row >= 0:
             self.messages[row] = {**self.messages[row], "edit_date": event.get("edit_date", 0)}
+            self._listener.history_changed(row)
+
+    def _on_interaction_info(self, event: Event) -> None:  # reactions, views, replies
+        if event.get("chat_id") != self.chat_id:
+            return
+        row = self.row_of(event["message_id"])
+        if row >= 0:
+            self.messages[row] = {**self.messages[row],
+                                  "interaction_info": event.get("interaction_info")}
             self._listener.history_changed(row)
 
     def _on_delete(self, event: Event) -> None:

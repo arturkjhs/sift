@@ -8,8 +8,11 @@ from __future__ import annotations
 
 import asyncio
 from typing import Any
+from urllib.parse import quote
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
+
+from ..td.auth import QR_LOGIN
 
 _CODE_DESTINATIONS = {
     "authenticationCodeTypeTelegramMessage": "We sent the code to your Telegram app on another device.",
@@ -21,7 +24,7 @@ _CODE_DESTINATIONS = {
 
 
 class AuthController(QObject):
-    """step: loading | phone | code | password | email | emailCode | link | ready | failed"""
+    """step: loading | phone | code | password | email | emailCode | qr | ready | failed"""
 
     changed = Signal()
 
@@ -52,9 +55,19 @@ class AuthController(QObject):
     def link(self) -> str:
         return self._link
 
+    @Property(str, notify=changed)
+    def qrSource(self) -> str:
+        return f"image://qr/{quote(self._link, safe='')}" if self._link else ""
+
     @Property(bool, notify=changed)
     def busy(self) -> bool:
         return self._busy
+
+    @Slot()
+    def requestQr(self) -> None:
+        """On the phone step: log in by scanning a QR code instead."""
+        if self._step == "phone":
+            self.submit(QR_LOGIN)
 
     @Slot(str)
     def submit(self, value: str) -> None:
@@ -97,7 +110,7 @@ class AuthController(QObject):
     async def show_link(self, link: str) -> None:
         self._busy = False
         self._link = link
-        self._set("link", hint="Confirm this login on a device where you are already signed in.")
+        self._set("qr", hint="")
 
     async def show_error(self, message: str) -> None:
         # Stay busy: AuthFlow re-asks (or TDLib changes state) right after, and _ask() unlocks

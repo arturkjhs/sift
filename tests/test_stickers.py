@@ -152,7 +152,7 @@ class StickerTest(unittest.IsolatedAsyncioTestCase):
         self.model.data(self.model.index(1), self.Role.Source)
         await wait_until(lambda: {r["file_id"] for r in self.sent("downloadFile")} >= {105, 206})
         await wait_until(lambda: self.model.data(self.model.index(1), self.Role.Source)
-                         == "image://tg/sticker/206")
+                         == "image://tg/0/sticker/206")
 
     async def test_switching_sets_and_updates(self) -> None:
         self.model.load()

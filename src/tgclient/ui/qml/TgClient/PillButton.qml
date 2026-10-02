@@ -5,6 +5,7 @@ import QtQuick.Controls.Basic
 AbstractButton {
     id: root
     property bool filled: false
+    property bool danger: false   // filled with the danger color: destructive confirmations
     property string iconName: ""
 
     implicitWidth: content.implicitWidth + 24
@@ -16,7 +17,7 @@ AbstractButton {
 
     background: Rectangle {
         radius: height / 2
-        color: root.filled ? Theme.accent
+        color: root.filled ? (root.danger ? Theme.danger : Theme.accent)
              : root.down ? Theme.selection
              : root.hovered ? Theme.hover : "transparent"
         border.width: root.filled ? 0 : 1

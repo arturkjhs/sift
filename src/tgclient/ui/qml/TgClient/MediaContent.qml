@@ -1,5 +1,7 @@
 import QtQuick
 import QtQuick.Window
+import QtMultimedia
+import TgClient.Native
 
 // Media part of a message bubble: photo/video thumbnail, sticker, round video, file card, voice.
 Item {
@@ -17,12 +19,18 @@ Item {
     property string duration: ""
     property var waveform: []
     property string stickerEmoji: ""
+    property string stickerFormat: ""     // webp | tgs | webm
+    property string playbackPath: ""      // animated sticker or GIF, once downloaded
+    property var albumItems: []           // kind "album": [{messageId, kind, source, x, y, w, h, ...}]
     property real maxWidth: 300
     property var messageId: 0
 
     signal activated()
 
     readonly property bool isVisual: kind === "photo" || kind === "video" || kind === "animation"
+                                     || kind === "album"
+    // Animations play only while on screen and the app is in front.
+    readonly property bool canPlay: visible && Qt.application.state === Qt.ApplicationActive
     readonly property bool isCard: kind === "document" || kind === "audio"
     readonly property bool busy: fileState === "downloading" || fileState === "uploading"
     readonly property real visualScale: isVisual && mediaWidth > maxWidth ? maxWidth / mediaWidth : 1
@@ -48,10 +56,60 @@ Item {
         return m + ":" + (s < 10 ? "0" : "") + s
     }
 
+    // --- album: a grid of photos and videos, each opens in the viewer ---------------------
+    Item {
+        anchors.fill: parent
+        visible: root.kind === "album"
+
+        Repeater {
+            model: root.kind === "album" ? root.albumItems : []
+            Item {
+                id: cell
+                required property var modelData
+                x: Math.round(modelData.x * root.visualScale)
+                y: Math.round(modelData.y * root.visualScale)
+                width: Math.round(modelData.w * root.visualScale)
+                height: Math.round(modelData.h * root.visualScale)
+
+                Rectangle {
+                    anchors.fill: parent
+                    radius: 6
+                    color: Theme.pill
+                }
+                Image {
+                    anchors.fill: parent
+                    source: cell.modelData.source === "" ? ""
+                            : cell.modelData.source + "/" + Math.round(6 * Screen.devicePixelRatio)
+                    sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
+                    sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
+                    asynchronous: true
+                    smooth: true
+                }
+                Rectangle {
+                    visible: cell.modelData.kind !== "photo"
+                             || cell.modelData.fileState === "downloading"
+                    anchors.centerIn: parent
+                    width: 36
+                    height: 36
+                    radius: 18
+                    color: "#99000000"
+                    Text {
+                        anchors.centerIn: parent
+                        text: cell.modelData.fileState === "downloading"
+                              ? Math.round(cell.modelData.progress * 100) + "%" : "\u25b6"
+                        color: "#FFFFFF"
+                        font.pixelSize: cell.modelData.fileState === "downloading" ? 10 : 14
+                    }
+                }
+                TapHandler { onTapped: messages.activateMedia(cell.modelData.messageId) }
+            }
+        }
+    }
+
     // --- photo, video, animation, round video ---------------------------------------------
     Item {
         anchors.fill: parent
-        visible: root.isVisual || root.kind === "videoNote"
+        visible: (root.isVisual && root.kind !== "album") || root.kind === "videoNote"
 
         Rectangle {
             anchors.fill: parent
@@ -68,8 +126,28 @@ Item {
             smooth: true
         }
 
+        // GIFs (MP4 without sound) loop inline once downloaded.
+        Loader {
+            anchors.fill: parent
+            active: root.kind === "animation" && root.playbackPath !== "" && root.canPlay
+            sourceComponent: Item {
+                VideoOutput {
+                    id: gifOutput
+                    anchors.fill: parent
+                    fillMode: VideoOutput.PreserveAspectCrop
+                }
+                MediaPlayer {
+                    source: "file://" + root.playbackPath
+                    loops: MediaPlayer.Infinite
+                    videoOutput: gifOutput
+                    Component.onCompleted: play()
+                }
+            }
+        }
+
         Rectangle {
-            visible: root.kind !== "photo" || root.busy
+            visible: (root.kind !== "photo" || root.busy)
+                     && !(root.kind === "animation" && root.playbackPath !== "")
             anchors.centerIn: parent
             width: 46
             height: 46
@@ -114,6 +192,7 @@ Item {
         Image {
             id: stickerImage
             anchors.fill: parent
+            visible: !animatedSticker.ready
             source: root.kind === "sticker" ? root.source : ""
             sourceSize.width: Math.ceil(width * Screen.devicePixelRatio)
             sourceSize.height: Math.ceil(height * Screen.devicePixelRatio)
@@ -121,9 +200,19 @@ Item {
             asynchronous: true
         }
 
+        // TGS and WebM stickers play over their static first frame once the file is here.
+        AnimatedImage {
+            id: animatedSticker
+            anchors.fill: parent
+            visible: ready
+            source: root.kind === "sticker" && root.stickerFormat !== "webp"
+                    ? root.playbackPath : ""
+            playing: root.canPlay
+        }
+
         Text {
             anchors.centerIn: parent
-            visible: stickerImage.status !== Image.Ready
+            visible: stickerImage.status !== Image.Ready && !animatedSticker.ready
             text: root.stickerEmoji
             font.pixelSize: 64
         }

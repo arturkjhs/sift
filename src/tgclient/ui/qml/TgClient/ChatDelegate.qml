@@ -15,6 +15,9 @@ Rectangle {
     required property string initials
     required property int colorIndex
     required property string chatType
+    required property string draft
+    required property string typing
+    required property bool online
 
     property bool selected: false
     signal clicked()
@@ -49,6 +52,18 @@ Rectangle {
         colorIndex: row.colorIndex
     }
 
+    Rectangle {  // online dot
+        visible: row.online
+        x: avatar.x + avatar.width - width + 1
+        y: avatar.y + avatar.height - height + 1
+        width: 13
+        height: 13
+        radius: width / 2
+        color: Theme.accent
+        border.width: 2
+        border.color: row.selected ? Theme.selection : Theme.sidebar
+    }
+
     Text {
         id: titleText
         anchors.left: avatar.right
@@ -74,18 +89,29 @@ Rectangle {
         font.pixelSize: Theme.fontSmall
     }
 
+    // "typing…" (accent) or "Draft: …" (danger) instead of the last message.
+    Text {
+        id: prefixText
+        anchors.left: titleText.left
+        anchors.baseline: previewText.baseline
+        visible: row.typing === "" && row.draft !== ""
+        text: qsTr("Draft:") + " "
+        color: Theme.danger
+        font.pixelSize: Theme.fontBody
+    }
+
     Text {
         id: previewText
-        anchors.left: titleText.left
+        anchors.left: prefixText.visible ? prefixText.right : titleText.left
         anchors.right: badges.left
         anchors.rightMargin: 8
         anchors.top: titleText.bottom
         anchors.topMargin: 3
-        text: row.preview
+        text: row.typing !== "" ? row.typing : row.draft !== "" ? row.draft : row.preview
         textFormat: Text.PlainText
         elide: Text.ElideRight
         maximumLineCount: 1
-        color: Theme.textMuted
+        color: row.typing !== "" ? Theme.accent : Theme.textMuted
         font.pixelSize: Theme.fontBody
     }
 

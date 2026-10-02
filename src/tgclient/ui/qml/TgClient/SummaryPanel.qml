@@ -2,7 +2,9 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// Summary of the open chat. Citations are tgc://message/<id> links that scroll the feed.
+// The AI panel of the open chat: summaries, a person, questions about the chat or a file,
+// dates and meetings, answers to a question. Citations are tgc://message/<id> links that
+// scroll the feed.
 Rectangle {
     id: root
     objectName: "summaryPanel"
@@ -12,6 +14,39 @@ Rectangle {
     signal messageRequested(var messageId)
 
     readonly property bool pending: ai.summaryState === "pending"
+    readonly property bool streams: kind === "explain" || kind === "reply"
+    readonly property bool hasOptions: kind === "reply" && ai.replyOptions.length > 0
+    property bool analysisShown: false
+    readonly property string kind: ai.subject === "" ? "summary"
+                                   : ai.subject.startsWith("user:") || ai.subject.startsWith("chat:")
+                                     ? "person"
+                                   : ai.subject.split(":")[0]   // ask | events | answers | doc
+
+    function focusQuestion() { questionField.forceActiveFocus() }
+
+    function title() {
+        switch (root.kind) {
+        case "person": return qsTr("About %1").arg(ai.summaryName)
+        case "ask": return qsTr("Ask this chat")
+        case "events": return qsTr("Dates and meetings")
+        case "answers": return qsTr("Answers")
+        case "doc": return qsTr("Ask about %1").arg(ai.summaryName || qsTr("the file"))
+        case "explain": return ai.summaryName !== "" ? qsTr("Message from %1").arg(ai.summaryName)
+                                                     : qsTr("About this message")
+        case "reply": return qsTr("Reply options")
+        }
+        return qsTr("Summary")
+    }
+
+    function emptyText() {
+        switch (root.kind) {
+        case "ask": return qsTr("Ask anything about this chat: what was decided, who sent a "
+                                + "link, when the meeting is. The answer links to the messages.")
+        case "doc": return qsTr("Ask a question about this file. The whole file is sent "
+                                + "with the question.")
+        }
+        return qsTr("Nothing yet.")
+    }
 
     ColumnLayout {
         anchors.fill: parent
@@ -24,7 +59,7 @@ Rectangle {
 
             Text {
                 Layout.fillWidth: true
-                text: ai.subject !== "" ? qsTr("About %1").arg(ai.summaryName) : qsTr("Summary")
+                text: root.title()
                 textFormat: Text.PlainText
                 elide: Text.ElideRight
                 color: Theme.text
@@ -33,25 +68,43 @@ Rectangle {
             }
             IconButton {
                 iconName: "refresh"
+                visible: !ai.canAsk || ai.summaryQuestion !== ""
                 enabled: !root.pending && ai.enabled && ai.summaryScope !== ""
-                Accessible.name: qsTr("Summarize again")
+                Accessible.name: qsTr("Run again")
                 onClicked: ai.summarizeAgain()
             }
             IconButton {
                 iconName: "close"
                 glyphSize: 12
-                Accessible.name: qsTr("Close summary")
+                Accessible.name: qsTr("Close panel")
                 onClicked: root.closeRequested()
             }
+        }
+
+        Text {  // the question being answered
+            Layout.fillWidth: true
+            visible: ai.canAsk && ai.summaryQuestion !== ""
+            text: ai.summaryQuestion
+            textFormat: Text.PlainText
+            wrapMode: Text.Wrap
+            maximumLineCount: 3
+            elide: Text.ElideRight
+            color: Theme.text
+            font.pixelSize: Theme.fontBody
+            font.italic: true
         }
 
         Text {
             Layout.fillWidth: true
             visible: text !== ""
-            text: root.pending ? qsTr("Summarizing\u2026") : ai.summaryInfo
+            text: root.pending ? (root.kind === "summary" || root.kind === "person"
+                                  ? qsTr("Summarizing…")
+                                  : root.streams && ai.summaryHtml !== "" ? qsTr("Writing…")
+                                  : qsTr("Thinking…"))
+                               : ai.summaryInfo
             color: root.pending ? Theme.accent : Theme.textMuted
             font.pixelSize: Theme.fontSmall
-            elide: Text.ElideRight
+            wrapMode: Text.Wrap
         }
 
         Text {
@@ -67,7 +120,8 @@ Rectangle {
         Text {
             Layout.fillWidth: true
             visible: ai.summaryHtml === "" && ai.summaryState === ""
-            text: qsTr("No summary yet.")
+            text: root.emptyText()
+            wrapMode: Text.Wrap
             color: Theme.textMuted
             font.pixelSize: Theme.fontBody
         }
@@ -78,13 +132,20 @@ Rectangle {
             Layout.fillHeight: true
             clip: true
             contentWidth: width
-            contentHeight: summaryText.height
+            contentHeight: contentColumn.height
             boundsBehavior: Flickable.StopAtBounds
-            opacity: root.pending ? 0.5 : 1
+            // Streamed answers grow in place; older results being redone are dimmed.
+            opacity: root.pending && !root.streams ? 0.5 : 1
+
+            Column {
+                id: contentColumn
+                width: flick.width - 8
+                spacing: 8
 
             Text {
                 id: summaryText
-                width: flick.width - 8
+                visible: !root.hasOptions
+                width: parent.width
                 text: ai.summaryHtml
                 textFormat: Text.RichText
                 wrapMode: Text.Wrap
@@ -104,13 +165,165 @@ Rectangle {
                 }
             }
 
+            // Reply options: the analysis folded away, then one card per strategy.
+            Text {
+                visible: root.hasOptions && ai.replyAnalysis !== ""
+                text: (root.analysisShown ? "▾ " : "▸ ") + qsTr("Analysis")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                font.weight: Font.DemiBold
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler { onTapped: root.analysisShown = !root.analysisShown }
+            }
+            Text {
+                visible: root.hasOptions && root.analysisShown
+                width: parent.width
+                text: ai.replyAnalysis
+                textFormat: Text.PlainText
+                wrapMode: Text.Wrap
+                color: Theme.text
+                font.pixelSize: Theme.fontBody
+                font.italic: true
+            }
+            Repeater {
+                model: root.hasOptions ? ai.replyOptions : []
+                Rectangle {
+                    id: card
+                    objectName: "replyOption"
+                    required property var modelData
+                    required property int index
+                    width: contentColumn.width
+                    height: cardColumn.implicitHeight + 20
+                    radius: 10
+                    color: Theme.window
+                    border.width: 1
+                    border.color: Theme.separator
+
+                    Column {
+                        id: cardColumn
+                        x: 10
+                        y: 10
+                        width: parent.width - 20
+                        spacing: 4
+
+                        Text {
+                            width: parent.width
+                            text: card.modelData.label
+                            textFormat: Text.PlainText
+                            elide: Text.ElideRight
+                            color: Theme.accent
+                            font.pixelSize: Theme.fontSmall
+                            font.weight: Font.DemiBold
+                        }
+                        TextEdit {
+                            width: parent.width
+                            text: card.modelData.text
+                            textFormat: TextEdit.PlainText
+                            wrapMode: TextEdit.Wrap
+                            readOnly: true
+                            selectByMouse: true
+                            color: Theme.text
+                            selectionColor: Theme.accent
+                            selectedTextColor: Theme.textOnAccent
+                            font.pixelSize: Theme.fontBody
+                        }
+                        Text {  // what it says, when the chat is in another language
+                            visible: text !== ""
+                            width: parent.width
+                            text: card.modelData.translation
+                            textFormat: Text.PlainText
+                            wrapMode: Text.Wrap
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontSmall
+                            font.italic: true
+                        }
+                        PillButton {
+                            objectName: "insertOption"
+                            text: qsTr("Insert")
+                            iconName: "edit"
+                            enabled: !root.pending
+                            onClicked: ai.insertOption(card.index)
+                        }
+                    }
+                }
+            }
+            }
+
             ScrollBar.vertical: ScrollBar {}
+        }
+
+        Flow {  // refine the replies
+            Layout.fillWidth: true
+            visible: root.hasOptions
+            spacing: 6
+            PillButton {
+                text: qsTr("Another option")
+                enabled: !root.pending
+                onClicked: ai.refineReplies("another")
+            }
+            PillButton {
+                text: qsTr("Shorter")
+                enabled: !root.pending
+                onClicked: ai.refineReplies("shorter")
+            }
+            PillButton {
+                text: qsTr("More formal")
+                enabled: !root.pending
+                onClicked: ai.refineReplies("formal")
+            }
+        }
+
+        PillButton {
+            objectName: "exportEvents"
+            visible: root.kind === "events" && ai.hasEvents && !root.pending
+            text: qsTr("Add to calendar")
+            iconName: "calendar"
+            onClicked: ai.exportEvents()
+        }
+
+        // Questions: about the chat ("ask") or about one file ("doc:<id>").
+        RowLayout {
+            Layout.fillWidth: true
+            visible: ai.canAsk
+            spacing: 6
+
+            TextField {
+                id: questionField
+                objectName: "questionField"
+                Layout.fillWidth: true
+                placeholderText: root.kind === "doc" ? qsTr("Ask about the file")
+                                                     : qsTr("Ask about this chat")
+                enabled: !root.pending && ai.enabled
+                color: Theme.text
+                placeholderTextColor: Theme.textMuted
+                font.pixelSize: Theme.fontBody
+                selectByMouse: true
+                background: Rectangle {
+                    implicitHeight: 32
+                    radius: 8
+                    color: Theme.field
+                    border.width: 1
+                    border.color: questionField.activeFocus ? Theme.accent : Theme.fieldBorder
+                }
+                onAccepted: {
+                    if (text.trim() !== "") {
+                        ai.ask(text)
+                        text = ""
+                    }
+                }
+            }
+            PillButton {
+                text: qsTr("Ask")
+                filled: true
+                enabled: questionField.enabled && questionField.text.trim() !== ""
+                onClicked: questionField.accepted()
+            }
         }
 
         Text {
             Layout.fillWidth: true
             text: qsTr("Made by %1 via OpenRouter. Can be wrong: check the linked messages.")
-                  .arg(ai.summaryModel)
+                  .arg(root.kind === "explain" ? ai.cheapModel : ai.summaryModel)
             wrapMode: Text.Wrap
             color: Theme.textMuted
             font.pixelSize: 11

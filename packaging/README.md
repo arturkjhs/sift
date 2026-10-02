@@ -53,7 +53,7 @@ Team ID: a later Team ID change resets users' permissions and Keychain access.
 
 ## What is baked into a build
 
-Only `VERSION`, `TG_API_ID` and `TG_API_HASH` (from the environment or the repo's `.env`;
+`VERSION`, `TG_API_ID`, `TG_API_HASH` and `UPDATE_REPO` (from the environment or the repo's `.env`;
 `tgclient --self-test` lists the baked fields, never their values). These identify the app,
 not a user, and anyone can extract them from the binary: use a dedicated Telegram account
 for them, so a ban for someone else's abuse doesn't hit your personal one.
@@ -63,3 +63,22 @@ with OpenRouter (`GET /api/v1/key`, free) and saved, readable only by the user (
 `~/Library/Application Support/tgclient/.env` (macOS), `~/.config/tgclient/.env` (Linux) or
 `~/.var/app/io.github.tgclient.TgClient/config/tgclient/.env` (Flatpak). An
 `OPENROUTER_API_KEY` in the environment takes precedence at startup.
+
+## Updates
+
+A build with `UPDATE_REPO` (CI bakes `GITHUB_REPOSITORY`; locally set `TGC_UPDATE_REPO`) checks
+`https://api.github.com/repos/<repo>/releases/latest` 30 s after start and then daily (Settings →
+Updates can turn it off). It picks the asset by name: `…-macos-<arm64|x86_64>.dmg` or
+`…-linux-<x86_64|aarch64>.AppImage`, so keep these names. The AppImage replaces itself
+(`$APPIMAGE`) and asks for a restart; on macOS the `.dmg` is downloaded and opened (ad-hoc
+signing, no silent self-replacement); Flatpak and source installs only get the release link.
+Drafts and pre-releases are ignored, and `dev` builds never report updates.
+
+## Media dependencies (M9)
+
+PyAV brings its own FFmpeg with libopus (Qt's FFmpeg can't encode Opus, which Telegram voice
+notes need) and libvpx (video stickers keep their alpha only with libvpx-vp9). PyAV 15.1 is
+pinned: newer macOS arm64 wheels need macOS 14. rlottie-python renders TGS stickers, segno
+draws login QR codes. `NSMicrophoneUsageDescription` in Info.plist is required for recording
+on macOS; the Flatpak's `--socket=pulseaudio` covers the microphone on Linux.
+`tgclient --self-test` checks the codecs ("media codecs").

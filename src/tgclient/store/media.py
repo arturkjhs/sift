@@ -32,6 +32,7 @@ class Media:
     title: str = ""
     waveform: bytes = b""
     emoji: str = ""
+    format: str = ""  # stickers: webp | tgs | webm
 
 
 def extract(content: dict[str, Any]) -> Media | None:
@@ -103,14 +104,28 @@ def _video(kind: str, video: dict[str, Any], file_key: str) -> Media:
 
 
 def _sticker(sticker: dict[str, Any]) -> Media:
-    is_static = (sticker.get("format") or {}).get("@type") == "stickerFormatWebp"
-    # Animated stickers (TGS/WebM) are shown by their static thumbnail for now.
-    preview = sticker.get("sticker") if is_static else _thumbnail_file(sticker.get("thumbnail"))
+    sticker_format = sticker_format_of(sticker)
+    # Animated stickers (TGS/WebM): the thumbnail shows until the file itself plays.
+    preview = (sticker.get("sticker") if sticker_format == "webp"
+               else _thumbnail_file(sticker.get("thumbnail")) or sticker.get("sticker"))
     return Media(
         kind="sticker", file=sticker.get("sticker"), preview=preview,
         width=sticker.get("width", 512) or 512, height=sticker.get("height", 512) or 512,
-        emoji=sticker.get("emoji", ""),
+        emoji=sticker.get("emoji", ""), format=sticker_format,
     )
+
+
+def sticker_format_of(sticker: dict[str, Any]) -> str:
+    return {"stickerFormatTgs": "tgs", "stickerFormatWebm": "webm"}.get(
+        (sticker.get("format") or {}).get("@type", ""), "webp")
+
+
+def album_id(message: dict[str, Any]) -> int:
+    """media_album_id (int64, a string in JSON); 0 if the message isn't part of an album."""
+    try:
+        return int(message.get("media_album_id") or 0)
+    except (TypeError, ValueError):
+        return 0
 
 
 def _thumbnail_file(thumbnail: dict[str, Any] | None) -> dict[str, Any] | None:
@@ -132,6 +147,14 @@ def _bytes(value: Any) -> bytes:
         return base64.b64decode(value)
     except (binascii.Error, ValueError, TypeError):
         return b""
+
+
+def encode_waveform(levels: list[int]) -> bytes:
+    """5-bit samples (0..31), packed little-endian like Telegram does (100 samples usually)."""
+    bits = 0
+    for index, level in enumerate(levels):
+        bits |= (max(0, min(31, int(level))) & 31) << (index * 5)
+    return bits.to_bytes((len(levels) * 5 + 7) // 8, "little")
 
 
 def decode_waveform(data: bytes, bars: int = 40) -> list[float]:

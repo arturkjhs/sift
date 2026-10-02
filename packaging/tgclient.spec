@@ -27,6 +27,16 @@ binaries = [(str(TDJSON), "tdlib")]
 hiddenimports = collect_submodules("tgclient") + [
     "PySide6.QtSvg", "PySide6.QtMultimedia", "PySide6.QtQuickControls2",
 ]
+# System notifications (ui/notifications.py imports them lazily, per platform).
+NOTIFY_PACKAGES = (("objc", "Foundation", "CoreFoundation", "UserNotifications")
+                   if sys.platform == "darwin" else ("jeepney",))
+# M9: PyAV (its own FFmpeg with libopus/libvpx), rlottie (TGS), segno (QR codes).
+NOTIFY_PACKAGES += ("av", "rlottie_python", "segno")
+for package in NOTIFY_PACKAGES:
+    d, b, h = collect_all(package)
+    datas += d
+    binaries += b
+    hiddenimports += h
 if os.environ.get("TGC_SEMANTIC") == "1":
     for package in ("fastembed", "onnxruntime", "tokenizers", "py_rust_stemmers"):
         d, b, h = collect_all(package)
@@ -96,6 +106,9 @@ if sys.platform == "darwin":
             "LSMinimumSystemVersion": os.environ.get("MACOSX_DEPLOYMENT_TARGET", "12.0"),
             "NSHighResolutionCapable": True,
             "NSRequiresAquaSystemAppearance": False,  # follow the system dark mode
+            # Asked when the user records a voice message for the first time.
+            "NSMicrophoneUsageDescription": "tgclient records voice messages when you press "
+                                            "the microphone button.",
             "LSApplicationCategoryType": "public.app-category.social-networking",
         },
     )

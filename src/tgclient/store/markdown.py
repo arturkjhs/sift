@@ -1,8 +1,8 @@
 """The small markdown subset LLM summaries use, rendered to Qt rich text HTML.
 
 Qt's own MarkdownText ignores the theme's link color and indents lists by 40px, so summaries are
-converted here: headings, bullet and numbered lists (nested by indentation), paragraphs, and
-inline **bold**, *italic*, `code` and [links](url). Anything else stays plain text.
+converted here: headings, bullet and numbered lists (nested by indentation), paragraphs, simple
+`| a | b |` tables, and inline **bold**, *italic*, `code` and [links](url). Anything else stays plain text.
 Only http(s) and tgc:// links become clickable.
 """
 
@@ -22,19 +22,33 @@ _INLINE = re.compile(
     r"|(?<![\w*])[*_](?P<italic>[^\s*_](?:.*?[^\s*_])?)[*_](?![\w*])"
 )
 _SAFE_SCHEMES = ("https://", "http://", "tgc://")
+_TABLE_RULE = re.compile(r"^\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?$")
 
 
 def markdown_to_html(text: str, palette: Palette) -> str:
     blocks: list[str] = []
     paragraph: list[str] = []
+    table: list[list[str]] = []
 
     def flush() -> None:
         if paragraph:
             blocks.append(_block(" ".join(paragraph), palette, top=6))
             paragraph.clear()
+        if table:
+            blocks.append(_table(table, palette))
+            table.clear()
 
     for raw in text.splitlines():
         line = raw.rstrip()
+        if line.strip().startswith("|"):
+            if paragraph:
+                blocks.append(_block(" ".join(paragraph), palette, top=6))
+                paragraph.clear()
+            if not _TABLE_RULE.match(line.strip()):
+                table.append([cell.strip() for cell in line.strip().strip("|").split("|")])
+            continue
+        if table:
+            flush()
         if not line.strip():
             flush()
             continue
@@ -52,6 +66,21 @@ def markdown_to_html(text: str, palette: Palette) -> str:
         paragraph.append(line.strip())
     flush()
     return "".join(blocks)
+
+
+def _table(rows: list[list[str]], palette: Palette) -> str:
+    """First row is the header. Qt rich text tables: borders via the table attributes."""
+    out = [(f'<table border="1" cellspacing="0" cellpadding="4" width="100%" '
+            f'style="margin-top:6px; border-color:{palette.code_background}; '
+            f'border-style:solid">')]
+    width = max(len(row) for row in rows)
+    for index, row in enumerate(rows):
+        cells = [*row, *[""] * (width - len(row))]
+        tag = "th" if index == 0 else "td"
+        out.append("<tr>" + "".join(
+            f'<{tag} align="left">{_inline(cell, palette)}</{tag}>' for cell in cells) + "</tr>")
+    out.append("</table>")
+    return "".join(out)
 
 
 def _block(text: str, palette: Palette, top: int, level: int = 0, glyph: str = "") -> str:

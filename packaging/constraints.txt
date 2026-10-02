@@ -8,3 +8,13 @@ PySide6-Addons==6.9.3
 shiboken6==6.9.3
 # Real minimum macOS 13.4 (newer releases require 14+); has x86_64 macOS wheels.
 onnxruntime==1.23.2
+# System notifications: pyobjc wheels are universal2 for macOS 10.13+; jeepney is pure Python.
+pyobjc-core==12.2.2
+pyobjc-framework-Cocoa==12.2.2
+pyobjc-framework-UserNotifications==12.2.2
+jeepney==0.9.0
+# M9 media: PyAV 15.1 is the last with macOS 13 arm64 wheels (16+ need macOS 14); Linux wheels
+# are manylinux_2_28 (Ubuntu 22.04 has glibc 2.35).
+av==15.1.0
+rlottie-python==1.3.8
+segno==1.6.6

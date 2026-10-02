@@ -7,7 +7,10 @@ don't collect data (`provider.data_collection = "deny"`). There is no way to tur
 from __future__ import annotations
 
 import base64
+import json
 import logging
+from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Any
 
 import httpx
@@ -21,6 +24,14 @@ ZDR_ROUTING: dict[str, Any] = {"zdr": True, "data_collection": "deny"}
 
 class OpenRouterError(Exception):
     pass
+
+
+@dataclass(frozen=True)
+class Completion:
+    text: str
+    cost: float = 0.0  # USD, from OpenRouter's usage accounting
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
 
 
 def mask_key(key: str) -> str:
@@ -48,14 +59,18 @@ class OpenRouter:
         )
 
     async def complete(
-        self, model: str, messages: list[dict[str, Any]], temperature: float = 0.2
-    ) -> str:
-        payload = {
+        self, model: str, messages: list[dict[str, Any]], temperature: float = 0.2,
+        plugins: list[dict[str, Any]] | None = None,
+    ) -> Completion:
+        payload: dict[str, Any] = {
             "model": model,
             "messages": messages,
             "temperature": temperature,
             "provider": ZDR_ROUTING,
+            "usage": {"include": True},  # the response then says what the request cost
         }
+        if plugins:
+            payload["plugins"] = plugins
         try:
             response = await self._http.post(API_URL, json=payload)
         except httpx.HTTPError as e:
@@ -73,9 +88,70 @@ class OpenRouter:
             raise OpenRouterError("Unexpected response from OpenRouter") from e
         if isinstance(content, list):  # some providers return content parts
             content = "".join(p.get("text", "") for p in content if isinstance(p, dict))
-        return (content or "").strip()
+        usage = body.get("usage") or {}
+        return Completion(
+            text=(content or "").strip(),
+            cost=float(usage.get("cost") or 0.0),
+            prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            completion_tokens=int(usage.get("completion_tokens") or 0),
+        )
 
-    async def transcribe(self, model: str, audio: bytes, audio_format: str, prompt: str) -> str:
+    async def stream(
+        self, model: str, messages: list[dict[str, Any]],
+        on_text: Callable[[str], None], temperature: float = 0.2,
+    ) -> Completion:
+        """Like complete(), but calls `on_text(text so far)` as the answer streams in
+        (server-sent events), so the UI shows the first lines within a second."""
+        payload: dict[str, Any] = {
+            "model": model, "messages": messages, "temperature": temperature,
+            "provider": ZDR_ROUTING, "usage": {"include": True}, "stream": True,
+        }
+        parts: list[str] = []
+        usage: dict[str, Any] = {}
+        try:
+            async with self._http.stream("POST", API_URL, json=payload) as response:
+                if response.status_code >= 400:
+                    body = await response.aread()
+                    try:
+                        error = json.loads(body).get("error")
+                    except ValueError:
+                        error = None
+                    raise OpenRouterError(_error_text(response.status_code, error, model))
+                # Read to the end even after [DONE]: a half-read httpx stream leaves async
+                # generators that the GC finalizes outside the event loop under qasync
+                # ("async generator ignored GeneratorExit" / "no running event loop").
+                finished = False
+                async for line in response.aiter_lines():
+                    if finished or not line.startswith("data:"):
+                        continue  # ": OPENROUTER PROCESSING" keep-alives, blank lines
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        finished = True
+                        continue
+                    try:
+                        chunk = json.loads(data)
+                    except ValueError:
+                        continue
+                    if chunk.get("error"):
+                        raise OpenRouterError(_error_text(500, chunk["error"], model))
+                    usage = chunk.get("usage") or usage
+                    for choice in chunk.get("choices") or []:
+                        delta = (choice.get("delta") or {}).get("content")
+                        if delta:
+                            parts.append(delta)
+                            on_text("".join(parts))
+        except httpx.HTTPError as e:
+            raise OpenRouterError(f"Network error: {e}") from e
+        return Completion(
+            text="".join(parts).strip(),
+            cost=float(usage.get("cost") or 0.0),
+            prompt_tokens=int(usage.get("prompt_tokens") or 0),
+            completion_tokens=int(usage.get("completion_tokens") or 0),
+        )
+
+    async def transcribe(
+        self, model: str, audio: bytes, audio_format: str, prompt: str,
+    ) -> Completion:
         return await self.complete(model, [{
             "role": "user",
             "content": [

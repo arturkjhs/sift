@@ -203,7 +203,7 @@ class MediaRolesTest(FileTestCase):
 
     async def test_photo_placeholder_then_real_image(self) -> None:
         self.assertEqual(self.role(2, self.Role.MediaKind), "photo")
-        self.assertEqual(self.role(2, self.Role.MediaSource), "image://tg/mini/12")
+        self.assertEqual(self.role(2, self.Role.MediaSource), "image://tg/0/mini/12")
         self.assertEqual((self.role(2, self.Role.MediaWidth), self.role(2, self.Role.MediaHeight)),
                          (320, 240))
         await wait_until(lambda: any(d["file_id"] == 12 for d in self.downloads))
@@ -212,7 +212,7 @@ class MediaRolesTest(FileTestCase):
         self.model.dataChanged.connect(lambda top, _bottom, _roles: changed.append(top.row()))
         await self.push({"@type": "updateFile", "file": file(12, path="/p.jpg", done=True)})
         self.assertIn(2, changed)
-        self.assertEqual(self.role(2, self.Role.MediaSource), "image://tg/media/12")
+        self.assertEqual(self.role(2, self.Role.MediaSource), "image://tg/0/media/12")
 
     async def test_sender_avatar_downloads_lazily(self) -> None:
         self.assertEqual(self.role(0, self.Role.SenderAvatar), "")
@@ -223,7 +223,7 @@ class MediaRolesTest(FileTestCase):
         await self.push({"@type": "updateFile", "file": file(80, path="/me.jpg", done=True)})
         self.assertIn((0, self.media_roles),
                       [(row, [int(x) for x in roles]) for row, roles in changed])
-        self.assertEqual(self.role(0, self.Role.SenderAvatar), "image://tg/avatar/80")
+        self.assertEqual(self.role(0, self.Role.SenderAvatar), "image://tg/0/avatar/80")
 
     async def test_document_click_downloads_then_cancels(self) -> None:
         self.assertEqual(self.role(0, self.Role.FileName), "report.pdf")

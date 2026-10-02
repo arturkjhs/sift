@@ -95,27 +95,49 @@ async def _checks() -> list[str]:
 
     await check("search by meaning", semantic)
 
+    def notifications() -> str:
+        if sys.platform == "darwin":
+            import UserNotifications  # noqa: F401
+            return "UserNotifications"
+        import jeepney  # noqa: F401
+        return "D-Bus (jeepney)"
+
+    await check("notifications", notifications)
+
+    def media() -> str:
+        import av
+        import segno  # noqa: F401
+        from rlottie_python import LottieAnimation  # noqa: F401
+
+        for codec, mode in (("libopus", "w"), ("libvpx-vp9", "r")):
+            av.codec.Codec(codec, mode)  # voice notes, video stickers with alpha
+        return f"PyAV {av.__version__}, rlottie, segno"
+
+    await check("media codecs", media)
+
     async def ui() -> str:
-        from .app import Session, create_engine
+        from .app import Session, create_engine, dispose_engine
         from .config import Settings
         from .services.ai_store import AiStore
         from .services.search_index import SearchIndex
+        from .ui.notifications import NullBackend
         from .ui.shell import ShellController
 
         with tempfile.TemporaryDirectory() as tmp:
             settings = Settings(api_id=1, api_hash="self-test", data_dir=Path(tmp),
                                 use_test_dc=True, td_log_level=0, log_level="WARNING")
             session = Session(settings, ai_store=AiStore(":memory:"),
-                              search_index=SearchIndex(":memory:"))
+                              search_index=SearchIndex(":memory:"),
+                              notification_backend=NullBackend())
             warnings: list[str] = []
             engine = create_engine(session, ShellController(asyncio.Event()),
                                    on_warnings=warnings.extend)
             loaded = bool(engine.rootObjects())
             for window in engine.rootObjects():
                 window.setProperty("visible", False)
-            problems = list(warnings)  # teardown below may add noise about destroyed objects
+            problems = list(warnings)
+            dispose_engine(engine)
             await session.close()
-            del engine
         assert loaded, f"QML failed to load: {problems}"
         assert not problems, f"QML warnings: {problems}"
         return "QML loaded"

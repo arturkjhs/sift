@@ -1,20 +1,26 @@
-"""AI features for QML: the per-chat switch, summaries of the open chat, settings info."""
+"""AI features for QML: the per-chat switch and flags, the AI panel of the open chat
+(summaries, questions, dates, answers, documents), results across chats (digest, promises),
+composer helpers (translation, reply suggestions), and settings (key, models, spending)."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Property, QObject, Signal, Slot
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtCore import Property, QObject, QStandardPaths, QUrl, Signal, Slot
+from PySide6.QtGui import QDesktopServices, QFontDatabase
 
 from ..config import remove_user_setting, save_user_setting
-from ..services.ai import AiService
+from ..prefs import Prefs
+from ..services import assist
+from ..services.ai import AiService, AiUnavailable, SummaryState
 from ..services.openrouter import OpenRouter, OpenRouterError, mask_key
-from ..services.summary import message_id_from_link
+from ..services.summary import message_id_from_link, parse_message_link
 from ..store.chats import ChatStore
 from ..store.markdown import markdown_to_html
 from ..store.richtext import Palette
@@ -23,7 +29,9 @@ log = logging.getLogger(__name__)
 
 KEY_SETTING = "OPENROUTER_API_KEY"
 
-_SCOPE_LABELS = {"unread": "Unread", "day": "Last 24 hours", "week": "Last 7 days"}
+_SCOPE_LABELS = {"unread": "Unread", "day": "Last 24 hours", "week": "Last 7 days",
+                 "events": "Last 30 days", "ask": "", "doc": "", "answers": "",
+                 "digest": "", "promises": "Last 14 days", "explain": "", "reply": ""}
 
 
 class AiController(QObject):
@@ -33,6 +41,13 @@ class AiController(QObject):
     configChanged = Signal()
     keyStateChanged = Signal()
     keySaved = Signal()
+    globalChanged = Signal()
+    usageChanged = Signal()
+    assistChanged = Signal()
+    replySuggested = Signal(str)  # composer: put this draft into the input
+    draftTranslated = Signal(str, str)  # composer: translation preview, language code
+    eventsExported = Signal(str)  # path of the written .ics
+    insertReply = Signal(str, "QVariant")  # composer: this text, as a reply to that message
 
     def __init__(
         self,
@@ -42,6 +57,7 @@ class AiController(QObject):
         router_factory: Callable[[str], OpenRouter] = OpenRouter,
         save_key: Callable[[str], None] = lambda key: save_user_setting(KEY_SETTING, key),
         remove_key: Callable[[], None] = lambda: remove_user_setting(KEY_SETTING),
+        prefs: Prefs | None = None,
     ) -> None:
         super().__init__(parent)
         self._service = service
@@ -52,8 +68,13 @@ class AiController(QObject):
         self._key_busy = False
         self._key_error = ""
         self._tasks: set[asyncio.Task[Any]] = set()
+        self._prefs = prefs or Prefs(None)
         self._chat_id = 0
         self._subject = ""  # what the summary panel shows: "" = the chat, "user:<id>" = a person
+        self._global = "digest"  # what the digest window shows: digest | promises
+        self._assist_busy = False
+        self._assist_error = ""
+        self._doc_names: dict[str, str] = {}  # "doc:<id>" -> file name, before the first answer
         mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
         self._palette = Palette(mono=mono)
         service.subscribe(self._on_service)
@@ -127,26 +148,86 @@ class AiController(QObject):
             lambda t: t.cancelled() or t.exception() is None
             or log.error("API key task failed", exc_info=t.exception()))
 
-    @Property(str, constant=True)
+    @Property(str, notify=configChanged)
     def summaryModel(self) -> str:
         return self._service.summary_model
 
-    @Property(str, constant=True)
+    @Property(str, notify=configChanged)
     def transcriptionModel(self) -> str:
         return self._service.transcription_model
+
+    @Property(str, notify=configChanged)
+    def cheapModel(self) -> str:
+        return self._service.cheap_model
+
+    @Slot(str, str, str)
+    def setModels(self, summary: str, cheap: str, transcription: str) -> None:
+        self._service.set_models(summary, cheap, transcription)
+        self._prefs.set("summary_model", self._service.summary_model)
+        self._prefs.set("cheap_model", self._service.cheap_model)
+        self._prefs.set("transcription_model", self._service.transcription_model)
+
+    @Property(float, notify=configChanged)
+    def monthlyLimit(self) -> float:
+        return self._service.monthly_limit
+
+    @Slot(float)
+    def setMonthlyLimit(self, usd: float) -> None:
+        self._service.set_limit(usd)
+        self._prefs.set("ai_monthly_limit", self._service.monthly_limit)
+        self.usageChanged.emit()
+
+    @Property(str, notify=configChanged)
+    def translateTo(self) -> str:
+        return self._service.translate_to
+
+    @Slot(str)
+    def setTranslateTo(self, lang: str) -> None:
+        self._service.set_translate_to(lang)
+        self._prefs.set("ai_language", self._service.translate_to)
+
+    @Property(str, notify=configChanged)
+    def languageLabel(self) -> str:
+        return assist.NATIVE.get(self._service.translate_to, "English")
+
+    @Property("QVariantList", constant=True)
+    def languages(self) -> list[dict[str, str]]:
+        return [{"code": code, "label": assist.NATIVE[code]} for code in assist.LANGUAGES]
+
+    @Property(str, notify=usageChanged)
+    def spentTotal(self) -> str:
+        return _usd(self._service.spent_total())
+
+    @Property("QVariantList", notify=usageChanged)
+    def spending(self) -> list[dict[str, Any]]:
+        rows = []
+        for chat_id, usd in self._service.spending():
+            chat = self._chats.chats.get(chat_id)
+            title = "Across chats (digest, promises)" if chat_id == 0 else (
+                chat.title if chat else str(chat_id))
+            rows.append({"chatId": chat_id, "title": title, "amount": _usd(usd)})
+        return rows
 
     @Property("QVariantList", notify=enabledChatsChanged)
     def enabledChats(self) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         for chat_id in self._service.enabled_chats():
             chat = self._chats.chats.get(chat_id)
-            result.append({"chatId": chat_id, "title": chat.title if chat else str(chat_id)})
+            result.append({"chatId": chat_id, "title": chat.title if chat else str(chat_id),
+                           "digest": self._service.flag(chat_id, "digest"),
+                           "smart": self._service.flag(chat_id, "smart_notify"),
+                           "spent": _usd(self._service.spent(chat_id))})
         result.sort(key=lambda c: c["title"].lower())
         return result
 
     @Slot("QVariant", bool)
     def setChatEnabled(self, chat_id: Any, enabled: bool) -> None:
         self._service.set_enabled(int(chat_id or 0), enabled)
+
+    @Slot("QVariant")
+    def forgetChat(self, chat_id: Any) -> None:
+        """Turn AI off for a chat and delete its transcripts, translations and results."""
+        self._service.forget(int(chat_id or 0))
 
     # --- the open chat ----------------------------------------------------------------------
 
@@ -176,6 +257,250 @@ class AiController(QObject):
     def setEnabled(self, enabled: bool) -> None:
         self._service.set_enabled(self._chat_id, enabled)
 
+    @Property(bool, notify=chatChanged)
+    def digestEnabled(self) -> bool:
+        return self._service.flag_set(self._chat_id, "digest")
+
+    @Slot(bool)
+    def setDigest(self, on: bool) -> None:
+        self._service.set_flag(self._chat_id, "digest", on)
+
+    @Property(bool, notify=chatChanged)
+    def smartNotify(self) -> bool:
+        return self._service.flag_set(self._chat_id, "smart_notify")
+
+    @Slot(bool)
+    def setSmartNotify(self, on: bool) -> None:
+        self._service.set_flag(self._chat_id, "smart_notify", on)
+
+    @Property(str, notify=usageChanged)
+    def spentHere(self) -> str:
+        return _usd(self._service.spent(self._chat_id))
+
+    @Slot("QVariant")
+    def translate(self, message_id: Any) -> None:
+        if self._chat_id:
+            self._service.translate(self._chat_id, int(message_id or 0))
+
+    # --- the AI panel: questions, dates, answers, documents ---------------------------------
+
+    @Slot(str)
+    def openPanel(self, subject: str) -> None:
+        """Show a subject without running anything (e.g. "ask": the question box)."""
+        self._show(subject)
+
+    @Slot(str)
+    def ask(self, question: str) -> None:
+        if not self._chat_id:
+            return
+        if self._subject.startswith("doc:"):
+            message_id = int(self._subject.split(":", 1)[1])
+            self._service.ask_document(self._chat_id, message_id, question, self.summaryName)
+        else:
+            self._show("ask")
+            self._service.ask(self._chat_id, question)
+
+    @Slot()
+    def findEvents(self) -> None:
+        if self._chat_id:
+            self._show("events")
+            self._service.find_events(self._chat_id)
+
+    @Slot("QVariant", str)
+    def collectAnswers(self, message_id: Any, name: str) -> None:
+        if self._chat_id and message_id:
+            self._show(f"answers:{int(message_id)}")
+            self._service.collect_answers(self._chat_id, int(message_id), name)
+
+    @Slot("QVariant", str)
+    def openDocument(self, message_id: Any, name: str) -> None:
+        """Ask about a file: shows the question box (the file goes out with the question)."""
+        if self._chat_id and message_id:
+            key = f"doc:{int(message_id)}"
+            if self._service.summary(self._chat_id, key).state == "":
+                self._doc_names[key] = name
+            self._show(key)
+
+    @Property(bool, notify=summaryChanged)
+    def canAsk(self) -> bool:
+        return self._subject == "ask" or self._subject.startswith("doc:")
+
+    @Property(str, notify=summaryChanged)
+    def summaryQuestion(self) -> str:
+        return self._current().question
+
+    @Property(str, notify=summaryChanged)
+    def summaryCost(self) -> str:
+        return _usd(self._current().cost) if self._current().state == "done" else ""
+
+    @Property(bool, notify=summaryChanged)
+    def hasEvents(self) -> bool:
+        return bool(self._current().data.get("events"))
+
+    @Slot()
+    def exportEvents(self) -> None:
+        """Write the found events as .ics and open it (Calendar offers to import it)."""
+        events = [assist.Event(**e) for e in self._current().data.get("events", [])]
+        if not events:
+            return
+        folder = QStandardPaths.writableLocation(
+            QStandardPaths.StandardLocation.DownloadLocation) or str(Path.home())
+        chat = self._chats.chats.get(self._chat_id)
+        name = re.sub(r"[^\w\- ]+", "", chat.title if chat else "chat").strip() or "chat"
+        path = Path(folder) / f"{name} - events.ics"
+        try:
+            path.write_text(assist.to_ics(events), encoding="utf-8")
+        except OSError as e:
+            log.warning("Writing %s failed: %s", path, e)
+            return
+        self.eventsExported.emit(str(path))
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
+
+    # --- one message: explain, suggest replies ------------------------------------------
+
+    @Slot("QVariant", str)
+    def explainMessage(self, message_id: Any, name: str) -> None:
+        if self._chat_id and message_id:
+            self._show(f"explain:{int(message_id)}")
+            self._service.explain_message(self._chat_id, int(message_id), name)
+
+    @Slot("QVariant", str)
+    def suggestReplies(self, message_id: Any, name: str) -> None:
+        if self._chat_id and message_id:
+            self._show(f"reply:{int(message_id)}")
+            self._service.suggest_replies(self._chat_id, int(message_id), name)
+
+    @Slot(str)
+    def refineReplies(self, modifier: str) -> None:
+        """another | shorter | formal, for the replies shown in the panel."""
+        if self._chat_id and self._subject.startswith("reply:"):
+            message_id = int(self._subject.split(":", 1)[1])
+            self._service.suggest_replies(self._chat_id, message_id, self.summaryName,
+                                          modifier)
+
+    @Property("QVariantList", notify=summaryChanged)
+    def replyOptions(self) -> list[dict[str, str]]:
+        return list(self._current().data.get("options", [])) if self._subject.startswith(
+            "reply:") else []
+
+    @Property(str, notify=summaryChanged)
+    def replyAnalysis(self) -> str:
+        return str(self._current().data.get("analysis", "")) if self._subject.startswith(
+            "reply:") else ""
+
+    @Slot(int)
+    def insertOption(self, index: int) -> None:
+        """Put a suggested reply into the input as a reply to its message. Never sends."""
+        options = self.replyOptions
+        if 0 <= index < len(options) and self._subject.startswith("reply:"):
+            self.insertReply.emit(options[index]["text"], int(self._subject.split(":", 1)[1]))
+
+    # --- across chats: digest and promises --------------------------------------------------
+
+    @Slot()
+    def digest(self) -> None:
+        self._show_global("digest")
+        self._service.digest()
+
+    @Slot()
+    def promises(self) -> None:
+        self._show_global("promises")
+        self._service.promises()
+
+    @Slot(str)
+    def showGlobal(self, subject: str) -> None:
+        self._show_global(subject)
+
+    def _show_global(self, subject: str) -> None:
+        if subject != self._global:
+            self._global = subject
+            self.globalChanged.emit()
+
+    def _global_state(self) -> SummaryState:
+        return self._service.summary(0, self._global)
+
+    @Property(str, notify=globalChanged)
+    def globalSubject(self) -> str:
+        return self._global
+
+    @Property(str, notify=globalChanged)
+    def globalState(self) -> str:
+        return self._global_state().state
+
+    @Property(str, notify=globalChanged)
+    def globalHtml(self) -> str:
+        return markdown_to_html(self._global_state().text, self._palette)
+
+    @Property(str, notify=globalChanged)
+    def globalError(self) -> str:
+        return self._global_state().error
+
+    @Property(str, notify=globalChanged)
+    def globalInfo(self) -> str:
+        return self._info(self._global_state())
+
+    @Property(int, notify=enabledChatsChanged)
+    def digestChats(self) -> int:
+        return sum(1 for c in self._service.enabled_chats() if self._service.flag(c, "digest"))
+
+    @Slot(str, result="QVariantList")
+    def parseLink(self, link: str) -> list[Any]:
+        """[chat id, message id]; chat 0 = the open chat; [0, 0] = not a message link."""
+        chat_id, message_id = parse_message_link(link)
+        return [chat_id, message_id]
+
+    # --- composer helpers -------------------------------------------------------------------
+
+    @Property(bool, notify=assistChanged)
+    def assistBusy(self) -> bool:
+        return self._assist_busy
+
+    @Property(str, notify=assistChanged)
+    def assistError(self) -> str:
+        return self._assist_error
+
+    @Slot(str, "QVariant")
+    def suggestReply(self, tone: str, reply_to: Any = 0) -> None:
+        chat_id = self._chat_id
+        if chat_id and not self._assist_busy:
+            self._assist(self._service.suggest_reply(chat_id, tone, int(reply_to or 0)),
+                         lambda text: self.replySuggested.emit(text), chat_id)
+
+    @Slot(str, str)
+    def translateDraft(self, text: str, lang: str) -> None:
+        chat_id = self._chat_id
+        if chat_id and not self._assist_busy:
+            self._assist(self._service.translate_text(chat_id, text, lang),
+                         lambda result: self.draftTranslated.emit(result, lang), chat_id)
+
+    @Slot()
+    def clearAssistError(self) -> None:
+        self._set_assist(self._assist_busy, "")
+
+    def _assist(self, work: Any, done: Callable[[str], None], chat_id: int) -> None:
+        self._set_assist(True, "")
+
+        async def run() -> None:
+            try:
+                result = await work
+            except AiUnavailable as e:
+                self._set_assist(False, str(e))
+                return
+            except Exception:
+                log.exception("AI assist failed")
+                self._set_assist(False, "Unexpected error, see the log")
+                return
+            self._set_assist(False, "")
+            if chat_id == self._chat_id:  # the user may have switched chats meanwhile
+                done(result)
+
+        self._spawn(run())
+
+    def _set_assist(self, busy: bool, error: str) -> None:
+        if (busy, error) != (self._assist_busy, self._assist_error):
+            self._assist_busy, self._assist_error = busy, error
+            self.assistChanged.emit()
+
     @Slot("QVariant")
     def transcribe(self, message_id: Any) -> None:
         if self._chat_id:
@@ -196,8 +521,20 @@ class AiController(QObject):
     @Slot()
     def summarizeAgain(self) -> None:
         summary = self._current()
-        if self._subject:
-            self.summarizePerson(self._subject, summary.name)
+        subject = self._subject
+        if subject == "ask" or subject.startswith("doc:"):
+            if summary.question:
+                self.ask(summary.question)
+        elif subject == "events":
+            self.findEvents()
+        elif subject.startswith("explain:"):
+            self.explainMessage(int(subject.split(":", 1)[1]), summary.name)
+        elif subject.startswith("reply:"):
+            self.suggestReplies(int(subject.split(":", 1)[1]), summary.name)
+        elif subject.startswith("answers:"):
+            self.collectAnswers(int(subject.split(":", 1)[1]), summary.name)
+        elif subject:
+            self.summarizePerson(subject, summary.name)
         elif summary.scope:
             self.summarize(summary.scope)
 
@@ -211,8 +548,8 @@ class AiController(QObject):
 
     @Property(str, notify=summaryChanged)
     def summaryName(self) -> str:
-        """Person summaries: who it is about."""
-        return self._current().name
+        """Who or what it is about: a person, a file, a question message."""
+        return self._current().name or self._doc_names.get(self._subject, "")
 
     def _show(self, subject: str) -> None:
         if subject != self._subject:
@@ -259,6 +596,7 @@ class AiController(QObject):
         if palette != self._palette:
             self._palette = palette
             self.summaryChanged.emit()
+            self.globalChanged.emit()
 
     @Property(str, notify=summaryChanged)
     def summaryError(self) -> str:
@@ -266,15 +604,24 @@ class AiController(QObject):
 
     @Property(str, notify=summaryChanged)
     def summaryInfo(self) -> str:
-        summary = self._current()
+        return self._info(self._current())
+
+    @staticmethod
+    def _info(summary: SummaryState) -> str:
         parts = [_SCOPE_LABELS.get(summary.scope, "")]
         if summary.scope == "person":
             parts = ["Their messages in this chat"]
-        if summary.count:
+        if summary.scope == "digest" and summary.data.get("since"):
+            since = datetime.fromtimestamp(summary.data["since"])  # noqa: DTZ006
+            parts = [f"Since {since:%d %b %H:%M}", f"{summary.data.get('chats', 0)} chats"]
+        if summary.count and summary.scope != "doc":
             more = "+" if summary.truncated else ""
-            parts.append(f"{summary.count}{more} messages")
+            noun = "message" if summary.count == 1 and not more else "messages"
+            parts.append(f"{summary.count}{more} {noun}")
         if summary.created:
             parts.append(datetime.fromtimestamp(summary.created).strftime("%d %b %H:%M"))  # noqa: DTZ006
+        if summary.state == "done" and summary.cost:
+            parts.append(_usd(summary.cost))
         return " · ".join(p for p in parts if p)
 
     @Slot(str, result="QVariant")
@@ -286,15 +633,25 @@ class AiController(QObject):
     def _on_service(self, kind: str, payload: Any) -> None:
         if kind == "config":
             self.configChanged.emit()
-        elif kind == "enabled":
+        elif kind in ("enabled", "flags"):
             self.enabledChatsChanged.emit()
             if payload == self._chat_id:
                 self.chatChanged.emit()
         elif kind == "summary" and payload == (self._chat_id, self._subject):
             self.summaryChanged.emit()
+        elif kind == "summary" and payload == (0, self._global):
+            self.globalChanged.emit()
+        elif kind == "usage":
+            self.usageChanged.emit()
 
     def _on_chats(self, kind: str, payload: Any) -> None:
         if kind == "chat" and self._service.is_enabled(payload):
             self.enabledChatsChanged.emit()  # title change
         if kind == "chat" and payload == self._chat_id:
             self.chatChanged.emit()  # the chat may have just arrived
+
+
+def _usd(amount: float) -> str:
+    if amount <= 0:
+        return "$0"
+    return f"${amount:.4f}" if amount < 0.01 else f"${amount:.2f}"

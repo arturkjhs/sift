@@ -40,6 +40,15 @@ Item {
     required property string stickerEmoji
     required property string transcript
     required property string transcriptState
+    required property string translation
+    required property string translationState
+    required property var reactions        // [{key, label, count, chosen}]
+    required property string forwardedFrom
+    required property bool unreadSeparator
+    required property bool albumHidden
+    required property var albumItems
+    required property string stickerFormat
+    required property string playbackPath
 
     property bool isGroupChat: false
     property bool flashed: false   // just jumped to: briefly tinted
@@ -49,15 +58,18 @@ Item {
     signal menuRequested(var messageId)
     signal linkActivated(string link)
     signal senderClicked(string senderKey, string senderName, var messageId)
+    signal reactionToggled(var messageId, string key)
 
     readonly property real sidePadding: 16
     readonly property real avatarSpace: isGroupChat && !isOutgoing ? 40 : 0
     readonly property real maxBubbleWidth: Math.max(160, Math.min(560, (width - avatarSpace) * 0.78))
     // Stickers and round videos sit on the background without a bubble; photos and videos
     // without text fill the bubble almost edge to edge, with the time drawn over the image.
-    readonly property bool visualMedia: ["photo", "video", "animation", "sticker", "videoNote"]
+    readonly property bool visualMedia: ["photo", "video", "animation", "sticker", "videoNote",
+                                         "album"]
                                         .indexOf(mediaKind) >= 0
-    readonly property bool timeOnMedia: visualMedia && html === ""
+    readonly property bool hasReactions: reactions !== undefined && reactions.length > 0
+    readonly property bool timeOnMedia: visualMedia && html === "" && !hasReactions
     // Voice and file cards leave room on their right for the time instead of an extra line
     // (a voice transcript below the player takes that line, so the time moves under it).
     readonly property bool showTranscript: mediaKind === "voice"
@@ -65,14 +77,19 @@ Item {
     readonly property bool longTranscript: transcriptState === "done" || transcriptState === "error"
     readonly property bool timeBesideMedia: ["voice", "document", "audio"].indexOf(mediaKind) >= 0
                                            && html === "" && !(showTranscript && longTranscript)
+                                           && !hasReactions
     readonly property bool bare: (mediaKind === "sticker" || mediaKind === "videoNote")
                                  && html === "" && replyToId === 0 && !showSender
-    readonly property real bubblePadding: bare ? 0 : timeOnMedia && !showSender && replyToId === 0 ? 4 : 10
+                                 && forwardedFrom === "" && !hasReactions
+    readonly property real bubblePadding: bare ? 0 : timeOnMedia && !showSender && replyToId === 0
+                                                     && forwardedFrom === "" ? 4 : 10
     readonly property real maxContentWidth: maxBubbleWidth - 2 * bubblePadding
     readonly property var statusGlyph: ({ pending: "\u25f7", sent: "\u2713", read: "\u2713\u2713", failed: "!" })
 
     width: ListView.view ? ListView.view.width : 400
-    height: column.height
+    // Other members of an album are drawn in the grid of its newest message.
+    height: albumHidden ? 0 : column.height
+    visible: !albumHidden
 
     Column {
         id: column
@@ -99,6 +116,29 @@ Item {
                     font.pixelSize: Theme.fontSmall
                     font.weight: Font.DemiBold
                 }
+            }
+        }
+
+        Item {  // "Unread messages": where the user stopped reading when the chat was opened
+            objectName: "unreadSeparator"
+            width: parent.width
+            height: visible ? 36 : 0
+            visible: root.unreadSeparator
+
+            Rectangle {
+                anchors.left: parent.left
+                anchors.right: parent.right
+                anchors.verticalCenter: parent.verticalCenter
+                height: 26
+                color: Theme.sidebar
+                opacity: 0.85
+            }
+            Text {
+                anchors.centerIn: parent
+                text: qsTr("Unread messages")
+                color: Theme.accent
+                font.pixelSize: Theme.fontSmall
+                font.weight: Font.DemiBold
             }
         }
 
@@ -154,11 +194,15 @@ Item {
 
                 readonly property real naturalWidth: Math.max(
                     senderLabel.visible ? senderLabel.implicitWidth : 0,
+                    forwardLabel.visible ? forwardLabel.implicitWidth : 0,
+                    reactionFlow.visible ? reactionFlow.naturalWidth + timeRow.implicitWidth + 12
+                                         : 0,
                     replyBlock.visible ? replyBlock.naturalWidth : 0,
                     mediaText.visible ? mediaText.implicitWidth + timeRow.implicitWidth + 12 : 0,
                     media.visible ? media.naturalWidth
                                     + (root.timeBesideMedia ? timeRow.implicitWidth + 12 : 0) : 0,
                     body.visible ? body.implicitWidth : 0,
+                    translationBlock.visible ? translationBlock.naturalWidth : 0,
                     transcriptText.visible ? transcriptText.implicitWidth
                         + (root.timeBesideMedia ? timeRow.implicitWidth + 12 : 0) : 0,
                     timeRow.implicitWidth)
@@ -204,6 +248,18 @@ Item {
                             onTapped: root.senderClicked(root.senderKey, root.senderName,
                                                          root.messageId)
                         }
+                    }
+
+                    Text {
+                        id: forwardLabel
+                        visible: root.forwardedFrom !== ""
+                        width: parent.width
+                        text: qsTr("Forwarded from %1").arg(root.forwardedFrom)
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                        color: Theme.accent
+                        font.pixelSize: Theme.fontSmall
+                        font.weight: Font.DemiBold
                     }
 
                     Rectangle {
@@ -277,6 +333,9 @@ Item {
                         duration: root.duration
                         waveform: root.waveform
                         stickerEmoji: root.stickerEmoji
+                        stickerFormat: root.stickerFormat
+                        playbackPath: root.playbackPath
+                        albumItems: root.albumItems
                         maxWidth: root.maxContentWidth
                         messageId: root.messageId
                         onActivated: messages.activateMedia(root.messageId)
@@ -335,8 +394,117 @@ Item {
                         }
                     }
 
+                    // Translation into the user's language (Translate in the message menu).
+                    Column {
+                        id: translationBlock
+                        objectName: "translationBlock"
+                        readonly property real naturalWidth: Math.max(
+                            translationLabel.implicitWidth, translationText.implicitWidth)
+                        visible: root.translationState !== ""
+                        width: parent.width
+                        topPadding: 2
+                        spacing: 1
+
+                        Text {
+                            id: translationLabel
+                            text: root.translationState === "pending" ? qsTr("Translating\u2026")
+                                : root.translationState === "error" ? qsTr("Translation failed")
+                                : qsTr("Translation")
+                            color: root.translationState === "error" ? Theme.danger : Theme.accent
+                            font.pixelSize: Theme.fontSmall
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            id: translationText
+                            visible: text !== ""
+                            width: parent.width
+                            text: root.translation
+                            textFormat: Text.PlainText
+                            wrapMode: Text.Wrap
+                            color: root.translationState === "error" ? Theme.danger : Theme.text
+                            font.pixelSize: root.translationState === "error" ? Theme.fontSmall
+                                                                               : Theme.fontTitle
+                        }
+                    }
+
+                    Flow {
+                        id: reactionFlow
+                        readonly property real naturalWidth: {
+                            let total = 0
+                            for (let i = 0; i < reactionRepeater.count; ++i) {
+                                const item = reactionRepeater.itemAt(i)
+                                if (item)
+                                    total += item.implicitWidth + (i > 0 ? spacing : 0)
+                            }
+                            return total
+                        }
+                        visible: root.hasReactions
+                        // The last line leaves room for the time on the right.
+                        width: parent.width - timeRow.implicitWidth - 8
+                        topPadding: 3
+                        spacing: 4
+
+                        Repeater {
+                            id: reactionRepeater
+                            model: root.reactions
+                            delegate: Rectangle {
+                                id: pill
+                                required property var modelData
+                                implicitWidth: pillRow.implicitWidth + 14
+                                width: implicitWidth
+                                height: 26
+                                radius: 13
+                                color: modelData.chosen ? Theme.accent
+                                     : Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b,
+                                               pillHover.hovered ? 0.22 : 0.13)
+
+                                Row {
+                                    id: pillRow
+                                    anchors.centerIn: parent
+                                    spacing: 4
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        visible: pill.modelData.image === ""
+                                        text: pill.modelData.label
+                                        textFormat: Text.PlainText
+                                        font.pixelSize: 14
+                                    }
+                                    Image {  // custom emoji reaction
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        visible: pill.modelData.image !== ""
+                                        width: 18
+                                        height: 18
+                                        source: pill.modelData.image
+                                        sourceSize.width: 36
+                                        sourceSize.height: 36
+                                        fillMode: Image.PreserveAspectFit
+                                    }
+                                    Text {
+                                        anchors.verticalCenter: parent.verticalCenter
+                                        text: pill.modelData.count
+                                        color: pill.modelData.chosen ? Theme.textOnAccent
+                                                                     : Theme.accent
+                                        font.pixelSize: Theme.fontSmall
+                                        font.weight: Font.DemiBold
+                                    }
+                                }
+
+                                HoverHandler {
+                                    id: pillHover
+                                    cursorShape: Qt.PointingHandCursor
+                                }
+                                TapHandler {
+                                    onTapped: root.reactionToggled(root.messageId,
+                                                                   pill.modelData.key)
+                                }
+                            }
+                        }
+                    }
+
                     Item {  // room for the time row when there's no text to tuck it into
-                        visible: !body.visible && !root.timeOnMedia && !root.timeBesideMedia
+                        visible: (translationBlock.visible && !reactionFlow.visible)
+                                 || (!body.visible && !root.timeOnMedia && !root.timeBesideMedia
+                                     && !reactionFlow.visible)
                         width: 1
                         height: mediaText.visible ? 0 : timeRow.height
                     }

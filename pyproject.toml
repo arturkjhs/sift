@@ -14,6 +14,14 @@ dependencies = [
     "python-dotenv>=1",
     "PySide6>=6.9",
     "qasync>=0.27",
+    # System notifications: UserNotifications on macOS, org.freedesktop.Notifications on Linux.
+    "pyobjc-framework-UserNotifications>=10; sys_platform == 'darwin'",
+    "jeepney>=0.8; sys_platform == 'linux'",
+    # M9: Opus voice notes and WebM (VP9 + alpha) stickers via FFmpeg with libopus/libvpx;
+    # TGS (Lottie) stickers; QR codes for login.
+    "av>=15.1",
+    "rlottie-python>=1.3.8",
+    "segno>=1.6",
 ]
 
 [project.optional-dependencies]

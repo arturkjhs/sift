@@ -8,14 +8,20 @@ from typing import Any
 
 from PySide6.QtCore import Property, QObject, Signal, Slot
 
+from ..prefs import Prefs
+
 
 class ShellController(QObject):
     themeChanged = Signal()
 
-    def __init__(self, quit_event: asyncio.Event, parent: Any = None) -> None:
+    def __init__(
+        self, quit_event: asyncio.Event, prefs: Prefs | None = None, parent: Any = None,
+    ) -> None:
         super().__init__(parent)
         self._quit_event = quit_event
-        self._theme = os.environ.get("TGC_THEME", "system")
+        self._prefs = prefs
+        saved = prefs.get("theme") if prefs else "system"
+        self._theme = os.environ.get("TGC_THEME") or saved or "system"
 
     @Property(str, notify=themeChanged)
     def theme(self) -> str:
@@ -26,6 +32,8 @@ class ShellController(QObject):
     def setTheme(self, theme: str) -> None:
         if theme != self._theme:
             self._theme = theme
+            if self._prefs is not None:
+                self._prefs.set("theme", theme)
             self.themeChanged.emit()
 
     @Slot()

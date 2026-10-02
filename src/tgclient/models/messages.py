@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import html
 import logging
 from datetime import datetime
@@ -24,7 +25,9 @@ from PySide6.QtGui import QDesktopServices, QFontDatabase, QGuiApplication
 
 from ..services.ai import AiService
 from ..services.summary import sender_key
+from ..store.album import album_layout
 from ..store.chats import ChatStore
+from ..store.custom_emoji import CustomEmojiStore
 from ..store.files import AUTO_PRIORITY, USER_PRIORITY, FileManager
 from ..store.format import (
     clock,
@@ -36,7 +39,24 @@ from ..store.format import (
     message_body,
 )
 from ..store.history import DELETED_REPLY, ChatHistory, Commit, Message
-from ..store.media import Media, decode_waveform, duration_text, extract, fit, human_size
+from ..store.media import (
+    Media,
+    album_id,
+    decode_waveform,
+    duration_text,
+    extract,
+    fit,
+    human_size,
+)
+from ..store.presence import PresenceStore, members_text, status_text, typing_text
+from ..store.reactions import (
+    DEFAULT_REACTIONS,
+    QUICK,
+    as_items,
+    available_keys,
+    message_reactions,
+    reaction_type,
+)
 from ..store.richtext import Palette, formatted_to_html
 from ..store.users import UserStore
 from ..td.client import TdClient, TdError
@@ -45,6 +65,10 @@ log = logging.getLogger(__name__)
 
 AVATAR_COLORS = 7
 GROUP_WINDOW_SECONDS = 5 * 60
+EDIT_WINDOW_SECONDS = 48 * 3600  # fallback when getMessageProperties isn't available
+UNREAD_MAX_PAGES = 6  # how far back opening a chat pages to reach the first unread message
+ALBUM_WIDTH = 320  # albums are laid out for this width; QML scales down narrower bubbles
+AUTOPLAY_MAX_BYTES = 10 * 1024 * 1024  # GIFs up to this size download and play by themselves
 AnyIndex = QModelIndex | QPersistentModelIndex
 
 
@@ -84,13 +108,22 @@ class Role(IntEnum):
     StickerEmoji = auto()
     Transcript = auto()
     TranscriptState = auto()
+    Reactions = auto()
+    Translation = auto()
+    TranslationState = auto()
+    ForwardedFrom = auto()
+    UnreadSeparator = auto()
+    AlbumHidden = auto()  # a member of an album shown by its newest message: zero height
+    AlbumItems = auto()  # on that newest message: [{messageId, kind, source, x, y, w, h, ...}]
+    StickerFormat = auto()  # webp | tgs | webm
+    PlaybackPath = auto()  # local file to play inline (animated sticker, GIF), "" until ready
 
 
 # Roles that depend on file state (refreshed when a file of the message changes).
 MEDIA_ROLES = [Role.MediaSource, Role.FileInfo, Role.FileState, Role.FileProgress,
-               Role.SenderAvatar]
+               Role.SenderAvatar, Role.PlaybackPath, Role.AlbumItems]
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
-_AUTO_OPEN_KINDS = {"photo", "video", "animation", "videoNote"}
+_VIEWER_KINDS = {"photo", "video", "animation", "videoNote"}
 
 
 _STATUS_GLYPH = {"pending": "\u25f7", "sent": "\u2713", "read": "\u2713\u2713", "failed": "!"}
@@ -114,6 +147,7 @@ class _Adapter:
         self._model.beginInsertRows(QModelIndex(), row, row + count - 1)
         commit()
         self._model.endInsertRows()
+        self._model._refresh_albums(row - 1, row + count)
 
     def history_remove(self, row: int, count: int, commit: Commit) -> None:
         if not self._current():
@@ -124,6 +158,7 @@ class _Adapter:
         commit()
         self._model._html_cache.pop(message_id, None)
         self._model.endRemoveRows()
+        self._model._refresh_albums(row - 1, row)
 
     def history_changed(self, row: int) -> None:
         if self._current():
@@ -135,10 +170,16 @@ class MessageListModel(QAbstractListModel):
     loadingChanged = Signal()
     paletteChanged = Signal()
     jumpReady = Signal(int)  # row of a message requested by jumpTo(), once it's loaded
+    viewerRequested = Signal("QVariant")  # message id of a photo/video to show full-window
+    unreadReady = Signal("QVariant")  # first unread message id, once loaded after opening
+    actionsReady = Signal("QVariant", "QVariantMap")  # message id, what can be done with it
+    editReady = Signal("QVariant", str)  # message id, its text as markdown for the composer
+    statusChanged = Signal()
 
     def __init__(
         self, client: TdClient, chats: ChatStore, users: UserStore,
-        ai: AiService | None = None, parent: Any = None,
+        ai: AiService | None = None, presence: PresenceStore | None = None,
+        parent: Any = None, emoji: CustomEmojiStore | None = None,
     ) -> None:
         super().__init__(parent)
         self._client = client
@@ -150,7 +191,8 @@ class MessageListModel(QAbstractListModel):
         self._html_cache: dict[int, str] = {}
         self._media_cache: dict[int, Media | None] = {}
         self._file_messages: dict[int, set[int]] = {}  # file id -> message ids showing it
-        self._open_when_ready: set[int] = set()
+        self._unread_after = 0  # last read incoming message id when the chat was opened
+        self._first_unread = 0  # message showing the "Unread messages" separator
         self._files: FileManager = chats.files
         self._files.subscribe(self._on_file)
         mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
@@ -160,6 +202,13 @@ class MessageListModel(QAbstractListModel):
         self._ai = ai
         if ai is not None:
             ai.subscribe(self._on_ai)
+        self._presence = presence
+        if presence is not None:
+            presence.subscribe(self._on_presence)
+        self._emoji = emoji
+        self._emoji_waiting: dict[str, set[int]] = {}  # custom emoji id -> message ids
+        if emoji is not None:
+            emoji.subscribe(self._on_emoji)
 
     # --- properties -------------------------------------------------------------------------
 
@@ -185,6 +234,26 @@ class MessageListModel(QAbstractListModel):
     @Property(bool, notify=loadingChanged)
     def loading(self) -> bool:
         return self._loading
+
+    @Property(str, notify=statusChanged)
+    def chatStatus(self) -> str:
+        """Under the title: typing, online / last seen, or member counts."""
+        typing = self._typing_text()
+        return typing or self._presence_text()
+
+    @Property(bool, notify=statusChanged)
+    def chatStatusActive(self) -> bool:
+        """Typing or online: drawn in the accent color."""
+        chat = self._chat()
+        if self._typing_text():
+            return True
+        return bool(chat and self._presence and chat.type in ("private", "secret")
+                    and self._presence.is_online(chat.peer_id))
+
+    @Slot()
+    def refreshStatus(self) -> None:
+        """"last seen 5 minutes ago" ages: QML calls this periodically."""
+        self.statusChanged.emit()
 
     def _get_link(self) -> str:
         return self._palette.link
@@ -227,10 +296,15 @@ class MessageListModel(QAbstractListModel):
         self._html_cache = {}
         self._media_cache = {}
         self._file_messages = {}
+        chat = self._chats.chats.get(chat_id)
+        self._unread_after = (chat.last_read_inbox_message_id
+                              if chat and chat.unread_count > 0 else 0)
+        self._first_unread = 0
         self.endResetModel()
         self.chatChanged.emit()
+        self.statusChanged.emit()
         self._spawn(self._client.send({"@type": "openChat", "chat_id": chat_id}))
-        self._spawn(self._run_load(history, history.load_initial()))
+        self._spawn(self._run_load(history, self._load_initial(history)))
 
     @Slot()
     def close(self) -> None:
@@ -258,6 +332,7 @@ class MessageListModel(QAbstractListModel):
         history = self._history
         if history is None or not text.strip():
             return
+        self._clear_unread_separator()
         self._spawn(self._send(history.chat_id, text, int(reply_to or 0)))
 
     @Slot(int, int)
@@ -277,6 +352,75 @@ class MessageListModel(QAbstractListModel):
             "@type": "viewMessages", "chat_id": history.chat_id, "message_ids": ids,
             "source": None, "force_read": True,
         }))
+
+    @Slot("QVariant")
+    def requestActions(self, message_id: Any) -> None:
+        """What the context menu may offer (edit, delete, reactions); answers via actionsReady."""
+        history = self._history
+        message = history.get(int(message_id or 0)) if history else None
+        if history is not None and message is not None:
+            self._spawn(self._actions(history.chat_id, message))
+
+    @Slot("QVariant", str)
+    def toggleReaction(self, message_id: Any, key: str) -> None:
+        history = self._history
+        message = history.get(int(message_id or 0)) if history else None
+        if history is None or message is None or not key:
+            return
+        chosen = any(r.key == key and r.chosen for r in message_reactions(message))
+        request: dict[str, Any] = {
+            "@type": "removeMessageReaction" if chosen else "addMessageReaction",
+            "chat_id": history.chat_id, "message_id": message["id"],
+            "reaction_type": reaction_type(key),
+        }
+        if not chosen:
+            request.update(is_big=False, update_recent_reactions=True)
+        self._spawn(self._request(request, "Reaction"))
+
+    @Slot("QVariant")
+    def startEdit(self, message_id: Any) -> None:
+        """Fetch the message text as markdown (entities kept) and emit editReady."""
+        history = self._history
+        message = history.get(int(message_id or 0)) if history else None
+        if message is not None:
+            self._spawn(self._start_edit(message))
+
+    @Slot("QVariant", str)
+    def saveEdit(self, message_id: Any, text: str) -> None:
+        history = self._history
+        message = history.get(int(message_id or 0)) if history else None
+        if history is not None and message is not None:
+            self._spawn(self._save_edit(history.chat_id, message, text))
+
+    @Slot(result="QVariant")
+    def lastEditableId(self) -> int:
+        """Newest own message that can be edited (Up arrow in an empty composer)."""
+        history = self._history
+        for message in history.messages if history else []:
+            if self._can_edit_guess(message):
+                return message["id"]
+        return 0
+
+    @Slot("QVariant", bool)
+    def deleteMessage(self, message_id: Any, revoke: bool) -> None:
+        history = self._history
+        if history is None or not message_id:
+            return
+        self._spawn(self._request({
+            "@type": "deleteMessages", "chat_id": history.chat_id,
+            "message_ids": [int(message_id)], "revoke": bool(revoke),
+        }, "Deleting"))
+
+    @Slot("QVariant", "QVariant")
+    def forward(self, message_id: Any, to_chat_id: Any) -> None:
+        history = self._history
+        if history is None or not message_id or not to_chat_id:
+            return
+        self._spawn(self._request({
+            "@type": "forwardMessages", "chat_id": int(to_chat_id), "topic_id": None,
+            "from_chat_id": history.chat_id, "message_ids": [int(message_id)],
+            "options": None, "send_copy": False, "remove_caption": False,
+        }, "Forwarding"))
 
     @Slot("QVariant", result=int)
     def rowOf(self, message_id: Any) -> int:
@@ -328,17 +472,17 @@ class MessageListModel(QAbstractListModel):
         media = self._media(message) if message else None
         if media is None or not media.file:
             return
+        if media.kind in _VIEWER_KINDS:
+            self.viewerRequested.emit(message["id"])  # the viewer downloads what it shows
+            return
         file_id = media.file["id"]
         state = self._files.get(file_id)
         status = state.status if state else "remote"
         if status == "ready":
             self.openFile(file_id)
         elif status == "downloading":
-            self._open_when_ready.discard(file_id)
             self._files.cancel(file_id)
         elif status == "remote":
-            if media.kind in _AUTO_OPEN_KINDS:
-                self._open_when_ready.add(file_id)
             self._files.download(file_id, USER_PRIORITY)
 
     @Slot("QVariant")
@@ -373,16 +517,36 @@ class MessageListModel(QAbstractListModel):
         }
         self._spawn(self._send_content(history.chat_id, content, int(reply_to or 0)))
 
-    @Slot("QVariantList")
-    def sendFiles(self, urls: list[Any]) -> None:
+    def send_voice_to(self, chat_id: int, path: str, duration: int, waveform: bytes,
+                      reply_to: int = 0) -> None:
+        """A recorded voice message (Ogg/Opus). The chat is the one it was recorded in, which
+        may no longer be open."""
+        if self._history is not None and self._history.chat_id == chat_id:
+            self._clear_unread_separator()
+        content = {
+            "@type": "inputMessageVoiceNote",
+            "voice_note": {"@type": "inputVoiceNote",
+                           "voice_note": {"@type": "inputFileLocal", "path": path},
+                           "duration": duration,
+                           "waveform": base64.b64encode(waveform).decode("ascii")},
+            "caption": None, "self_destruct_type": None,
+        }
+        self._spawn(self._send_content(chat_id, content, reply_to))
+
+    def send_file(self, path: str, caption: str = "", reply_to: int = 0) -> None:
+        self.send_files([(path, caption, reply_to)])
+
+    def send_files(self, files: list[tuple[str, str, int]]) -> None:
+        """Send local files (path, caption, reply-to) to the open chat one after another, so
+        they arrive in order (ComposerModel's staged attachments)."""
         history = self._history
-        if history is None:
-            return
-        for url in urls:
-            path = url.toLocalFile() if isinstance(url, QUrl) else QUrl(str(url)).toLocalFile()
-            if not path:
-                path = str(url)
-            self._spawn(self._send_file(history.chat_id, path))
+        if history is not None and files:
+            self._clear_unread_separator()
+            self._spawn(self._send_files(history.chat_id, files))
+
+    async def _send_files(self, chat_id: int, files: list[tuple[str, str, int]]) -> None:
+        for path, caption, reply_to in files:
+            await self._send_file(chat_id, path, caption, reply_to)
 
     # --- QAbstractListModel -----------------------------------------------------------------
 
@@ -431,13 +595,16 @@ class MessageListModel(QAbstractListModel):
                 return self._sender_avatar(message)
             case Role.ShowSender:
                 return self._is_group_chat() and not message.get("is_outgoing") and not (
-                    self._same_group(message, self._neighbor(row + 1)))
+                    self._same_group(message, self._neighbor(self._older_row(row))))
             case Role.GroupBottom:
                 return not self._same_group(message, self._neighbor(row - 1))
             case Role.ShowAvatar:
                 return (self._is_group_chat() and not message.get("is_outgoing")
                         and not self._same_group(message, self._neighbor(row - 1)))
             case Role.Html:
+                album = self._album_range(row)
+                if album and row == album[0]:
+                    return self._album_html(album)
                 return self._html(message)
             case Role.Time:
                 return clock(message.get("date", 0))
@@ -467,8 +634,33 @@ class MessageListModel(QAbstractListModel):
                 if role == Role.Transcript:
                     return transcript.text if transcript else ""
                 return transcript.state if transcript else ""
+            case Role.Translation | Role.TranslationState:
+                translation = (self._ai.translation(history.chat_id, message["id"])
+                               if self._ai else None)
+                if role == Role.Translation:
+                    return translation.text if translation else ""
+                return translation.state if translation else ""
+            case Role.Reactions:
+                return [{"key": r.key, "label": r.label, "count": r.count, "chosen": r.chosen,
+                         "image": self._emoji_url(r.key[7:], message["id"])
+                         if r.key.startswith("custom:") else ""}
+                        for r in message_reactions(message)]
+            case Role.ForwardedFrom:
+                return self._forwarded_from(message)
+            case Role.UnreadSeparator:
+                if not self._first_unread:
+                    return False
+                album = self._album_range(row)
+                if album:
+                    return row == album[0] and any(
+                        m["id"] == self._first_unread
+                        for m in history.messages[album[0]:album[1] + 1])
+                return message["id"] == self._first_unread
+            case Role.AlbumHidden:
+                album = self._album_range(row)
+                return bool(album) and row != album[0]
             case Role.DayLabel:
-                older = self._neighbor(row + 1)
+                older = self._neighbor(self._older_row(row))
                 if older is None:
                     return day_label(message.get("date", 0)) if history.reached_start else ""
                 if _day(older) != _day(message):
@@ -477,12 +669,29 @@ class MessageListModel(QAbstractListModel):
         return self._media_data(message, role)
 
     def _media_data(self, message: Message, role: int) -> Any:
+        if role in (Role.MediaKind, Role.MediaWidth, Role.MediaHeight, Role.AlbumItems):
+            history = self._history
+            row = history.row_of(message["id"]) if history else -1
+            album = self._album_range(row) if row >= 0 else None
+            if album and row == album[0]:
+                items = self._album_items(album)
+                match role:
+                    case Role.MediaKind:
+                        return "album"
+                    case Role.MediaWidth:
+                        return ALBUM_WIDTH
+                    case Role.MediaHeight:
+                        return max((i["y"] + i["h"] for i in items), default=0)
+                return items
+            if role == Role.AlbumItems:
+                return []
         media = self._media(message)
         if media is None:
             return {Role.MediaKind: "", Role.MediaSource: "", Role.MediaWidth: 0,
                     Role.MediaHeight: 0, Role.FileId: 0, Role.FileName: "", Role.FileInfo: "",
                     Role.FileState: "", Role.FileProgress: 0.0, Role.Duration: "",
-                    Role.Waveform: [], Role.StickerEmoji: ""}.get(role)
+                    Role.Waveform: [], Role.StickerEmoji: "", Role.StickerFormat: "",
+                    Role.PlaybackPath: ""}.get(role)
         main = self._files.get(media.file["id"]) if media.file else None
         match role:
             case Role.MediaKind:
@@ -517,7 +726,92 @@ class MessageListModel(QAbstractListModel):
                 return decode_waveform(media.waveform) if media.kind == "voice" else []
             case Role.StickerEmoji:
                 return media.emoji
+            case Role.StickerFormat:
+                return media.format
+            case Role.PlaybackPath:
+                return self._playback_path(media, main)
         return None
+
+    def _playback_path(self, media: Media, main: Any) -> str:
+        """Animated stickers and small GIFs play inline: download them as they scroll by."""
+        animated = media.kind == "sticker" and media.format in ("tgs", "webm")
+        gif = media.kind == "animation" and 0 < (main.size if main else 0) <= AUTOPLAY_MAX_BYTES
+        if not media.file or not (animated or gif):
+            return ""
+        path = self._files.path(media.file["id"])
+        if path:
+            return path
+        self._files.download(media.file["id"], AUTO_PRIORITY)
+        return ""
+
+    # --- albums -----------------------------------------------------------------------------
+
+    def _album_range(self, row: int) -> tuple[int, int] | None:
+        """(newest row, oldest row) of the loaded album containing `row`, if 2+ are loaded."""
+        messages = self._history.messages if self._history else []
+        if not 0 <= row < len(messages):
+            return None
+        group = album_id(messages[row])
+        if not group:
+            return None
+        low = high = row
+        while low > 0 and album_id(messages[low - 1]) == group:
+            low -= 1
+        while high + 1 < len(messages) and album_id(messages[high + 1]) == group:
+            high += 1
+        return (low, high) if high > low else None
+
+    def _older_row(self, row: int) -> int:
+        """The next older row that is shown (skips the hidden members of an album)."""
+        album = self._album_range(row)
+        return album[1] + 1 if album and row == album[0] else row + 1
+
+    def _album_items(self, album: tuple[int, int]) -> list[dict[str, Any]]:
+        assert self._history is not None
+        members = list(reversed(self._history.messages[album[0]:album[1] + 1]))  # oldest first
+        medias = [self._media(m) for m in members]
+        sizes = [(m.width, m.height) if m else (1, 1) for m in medias]
+        cells = album_layout(sizes, ALBUM_WIDTH)
+        items = []
+        for message, media, cell in zip(members, medias, cells, strict=True):
+            main = self._files.get(media.file["id"]) if media and media.file else None
+            items.append({
+                "messageId": message["id"], "kind": media.kind if media else "",
+                "source": self._media_source(media) if media else "",
+                "x": cell.x, "y": cell.y, "w": cell.width, "h": cell.height,
+                "fileState": main.status if main else "remote",
+                "progress": main.progress if main else 0.0,
+                "duration": duration_text(media.duration) if media and media.duration else "",
+            })
+        return items
+
+    def _album_html(self, album: tuple[int, int]) -> str:
+        """The album's caption (whichever member has it) with the newest member's time."""
+        assert self._history is not None
+        newest = self._history.messages[album[0]]
+        captioned = next((m for m in reversed(self._history.messages[album[0]:album[1] + 1])
+                          if message_body(m.get("content", {}))), None)
+        if captioned is None:
+            return ""
+        return formatted_to_html(message_body(captioned.get("content", {})), self._palette,
+                                 self._time_spacer(newest), self._emoji_callback(newest["id"]))
+
+    def _refresh_albums(self, first: int, last: int) -> None:
+        """An album gained or lost a member: all its rows change (hidden/shown, grid)."""
+        history = self._history
+        if history is None:
+            return
+        done: set[tuple[int, int]] = set()
+        for row in range(max(0, first), min(len(history.messages), last + 1)):
+            album = self._album_range(row)
+            if album is None or album in done:
+                continue
+            done.add(album)
+            for member in history.messages[album[0]:album[1] + 1]:
+                self._html_cache.pop(member["id"], None)
+            self.dataChanged.emit(self.index(album[0]), self.index(album[1]))
+            if album[1] + 1 < len(history.messages):  # the row above may regain its name
+                self.dataChanged.emit(self.index(album[1] + 1), self.index(album[1] + 1))
 
     def _media(self, message: Message) -> Media | None:
         message_id = message["id"]
@@ -542,13 +836,13 @@ class MessageListModel(QAbstractListModel):
         preview_id = preview["id"]
         if self._files.path(preview_id):
             if media.kind == "sticker":
-                return f"image://tg/sticker/{preview_id}"
+                return self._files.url("sticker", preview_id)
             if media.kind == "videoNote":
-                return f"image://tg/avatar/{preview_id}"
-            return f"image://tg/media/{preview_id}"
+                return self._files.url("avatar", preview_id)
+            return self._files.url("media", preview_id)
         self._files.download(preview_id, AUTO_PRIORITY)
         if preview_id in self._files.minithumbnails and media.kind != "sticker":
-            return f"image://tg/mini/{preview_id}"
+            return self._files.url("mini", preview_id)
         return ""
 
     # --- internals --------------------------------------------------------------------------
@@ -600,9 +894,79 @@ class MessageListModel(QAbstractListModel):
             return ""
         self._file_messages.setdefault(file_id, set()).add(message["id"])
         if self._files.path(file_id):
-            return f"image://tg/avatar/{file_id}"
+            return self._files.url("avatar", file_id)
         self._files.download(file_id, AUTO_PRIORITY)
         return ""
+
+    def _forwarded_from(self, message: Message) -> str:
+        origin = (message.get("forward_info") or {}).get("origin") or {}
+        match origin.get("@type"):
+            case "messageOriginUser" | "messageForwardOriginUser":
+                user = self._users.users.get(origin.get("sender_user_id", 0))
+                return user.full_name if user else "Unknown"
+            case "messageOriginHiddenUser" | "messageForwardOriginHiddenUser":
+                return origin.get("sender_name", "")
+            case "messageOriginChat" | "messageOriginChannel" | "messageForwardOriginChat" | \
+                    "messageForwardOriginChannel":
+                chat = self._chats.chats.get(origin.get("sender_chat_id") or origin.get("chat_id")
+                                             or 0)
+                title = chat.title if chat else "Unknown"
+                signature = origin.get("author_signature", "")
+                return f"{title} ({signature})" if signature else title
+        return ""
+
+    def _typing_text(self) -> str:
+        chat = self._chat()
+        if chat is None or self._presence is None:
+            return ""
+        return typing_text(self._presence.typing.get(chat.id, []), self._sender_key_name,
+                           chat.type in ("private", "secret"))
+
+    def _sender_key_name(self, key: int) -> str:
+        user = self._users.users.get(key)
+        if user is not None:
+            return user.full_name
+        chat = self._chats.chats.get(key)
+        return chat.title if chat else ""
+
+    def _presence_text(self) -> str:
+        chat = self._chat()
+        presence = self._presence
+        if chat is None or presence is None:
+            return ""
+        if chat.type in ("private", "secret"):
+            if chat.peer_id == self._users.my_id:
+                return ""  # Saved Messages
+            if chat.peer_id in presence.bots:
+                return "bot"
+            return status_text(presence.statuses.get(chat.peer_id))
+        return members_text(presence.members.get(chat.peer_id, 0),
+                            presence.online_count.get(chat.id, 0), chat.type == "channel")
+
+    def _on_presence(self, kind: str, payload: Any) -> None:
+        chat = self._chat()
+        if chat is None:
+            return
+        if (kind in ("typing", "online_count") and payload == chat.id) or (
+                kind in ("user", "members") and payload == chat.peer_id):
+            self.statusChanged.emit()
+
+    def _can_edit_guess(self, message: Message) -> bool:
+        content = message.get("content", {})
+        if "can_be_edited" in message:  # older TDLib
+            return bool(message["can_be_edited"]) and _has_text_field(content)
+        state = (message.get("sending_state") or {}).get("@type")
+        chat = self._chat()
+        saved = chat is not None and chat.peer_id == self._users.my_id and chat.type == "private"
+        return (bool(message.get("is_outgoing")) and state is None and not is_service(content)
+                and _has_text_field(content)
+                and (saved or _now() - message.get("date", 0) < EDIT_WINDOW_SECONDS))
+
+    def _clear_unread_separator(self) -> None:
+        if self._first_unread and self._history:
+            row = self._history.row_of(self._first_unread)
+            self._first_unread = 0
+            self._row_changed(row)
 
     def _short_text(self, message: Message) -> str:
         return " ".join(content_preview(message.get("content", {})).split())[:200]
@@ -627,9 +991,41 @@ class MessageListModel(QAbstractListModel):
         body = message_body(message.get("content", {}))
         result = ""
         if body and body.get("text"):
-            result = formatted_to_html(body, self._palette, self._time_spacer(message))
+            result = formatted_to_html(body, self._palette, self._time_spacer(message),
+                                       self._emoji_callback(message["id"]))
         self._html_cache[message["id"]] = result
         return result
+
+    def _emoji_callback(self, message_id: int) -> Any:
+        return lambda emoji_id: self._emoji_url(emoji_id, message_id)
+
+    def _emoji_url(self, emoji_id: str, message_id: int) -> str:
+        if self._emoji is None or not emoji_id:
+            return ""
+        url = self._emoji.url(emoji_id)
+        if url is None:
+            self._emoji_waiting.setdefault(emoji_id, set()).add(message_id)
+        return url or ""
+
+    def _on_emoji(self, ids: set[str]) -> None:
+        history = self._history
+        waiting: set[int] = set()
+        for emoji_id in ids:
+            waiting |= self._emoji_waiting.pop(emoji_id, set())
+        if history is None:
+            return
+        for message_id in waiting:
+            row = history.row_of(message_id)
+            if row < 0:
+                continue
+            album = self._album_range(row)
+            if album:
+                row = album[0]
+                for member in history.messages[album[0]:album[1] + 1]:
+                    self._html_cache.pop(member["id"], None)
+            self._html_cache.pop(message_id, None)
+            index = self.index(row)
+            self.dataChanged.emit(index, index, [Role.Html, Role.Reactions])
 
     def _time_spacer(self, message: Message) -> str:
         """Invisible copy of the time label at the end of the text, so the last line leaves room
@@ -646,6 +1042,15 @@ class MessageListModel(QAbstractListModel):
             message_id = self._history.messages[row]["id"]
             self._html_cache.pop(message_id, None)
             self._media_cache.pop(message_id, None)
+            index = self.index(row)
+            self.dataChanged.emit(index, index)
+            album = self._album_range(row)
+            if album and row != album[0]:  # the grid on the newest member shows this one
+                self._row_changed_plain(album[0])
+
+    def _row_changed_plain(self, row: int) -> None:
+        if self._history and 0 <= row < len(self._history.messages):
+            self._html_cache.pop(self._history.messages[row]["id"], None)
             index = self.index(row)
             self.dataChanged.emit(index, index)
 
@@ -668,31 +1073,41 @@ class MessageListModel(QAbstractListModel):
                 )
 
     def _on_file(self, file_id: int) -> None:
-        if file_id in self._open_when_ready and self._files.path(file_id):
-            self._open_when_ready.discard(file_id)
-            self.openFile(file_id)
         history = self._history
         if history is None:
             return
         for message_id in self._file_messages.get(file_id, ()):
             row = history.row_of(message_id)
             if row >= 0:
+                album = self._album_range(row)
+                if album:
+                    row = album[0]
                 index = self.index(row)
                 self.dataChanged.emit(index, index, MEDIA_ROLES)
 
     def _on_ai(self, kind: str, payload: Any) -> None:
         history = self._history
-        if kind != "transcript" or history is None:
+        if history is None:
+            return
+        if kind == "config" and self.rowCount() > 0:  # translation language changed
+            self.dataChanged.emit(self.index(0), self.index(self.rowCount() - 1),
+                                  [Role.Translation, Role.TranslationState])
+            return
+        roles = {"transcript": [Role.Transcript, Role.TranscriptState],
+                 "translation": [Role.Translation, Role.TranslationState]}.get(kind)
+        if roles is None:
             return
         chat_id, message_id = payload
         row = history.row_of(message_id) if chat_id == history.chat_id else -1
         if row >= 0:
             index = self.index(row)
-            self.dataChanged.emit(index, index, [Role.Transcript, Role.TranscriptState])
+            self.dataChanged.emit(index, index, roles)
 
-    async def _send_file(self, chat_id: int, path: str) -> None:
+    async def _send_file(
+        self, chat_id: int, path: str, caption: str = "", reply_to: int = 0,
+    ) -> None:
         local = {"@type": "inputFileLocal", "path": path}
-        if _suffix(path) in _IMAGE_EXTENSIONS and _suffix(path) != ".gif":
+        if is_image_path(path):
             # Recent TDLib wraps the file in inputPhoto / inputDocument.
             content: dict[str, Any] = {
                 "@type": "inputMessagePhoto",
@@ -703,15 +1118,9 @@ class MessageListModel(QAbstractListModel):
                 "@type": "inputMessageDocument",
                 "document": {"@type": "inputDocument", "document": local},
             }
-        try:
-            message = await self._client.send(
-                {"@type": "sendMessage", "chat_id": chat_id, "input_message_content": content})
-        except TdError as e:
-            log.warning("Sending %s failed: %s", path, e)
-            return
-        history = self._history
-        if history and history.chat_id == chat_id and history.get(message["id"]) is None:
-            history.add(message)
+        if caption.strip():
+            content["caption"] = await self._formatted(caption)
+        await self._send_content(chat_id, content, reply_to)
 
     async def _send_content(self, chat_id: int, content: dict[str, Any], reply_to: int) -> None:
         request: dict[str, Any] = {
@@ -724,8 +1133,124 @@ class MessageListModel(QAbstractListModel):
             log.warning("Sending %s failed: %s", content["@type"], e)
             return
         history = self._history
-        if history and history.chat_id == chat_id and history.get(message["id"]) is None:
+        if (history and history.chat_id == chat_id and message.get("id")
+                and history.get(message["id"]) is None):
             history.add(message)
+
+    async def _load_initial(self, history: ChatHistory) -> None:
+        """Newest page, then (if the chat has unread messages) back to the first unread one."""
+        await history.load_initial()
+        boundary = self._unread_after
+        if not boundary or history is not self._history:
+            return
+        oldest = history.messages[-1]["id"] if history.messages else 0
+        if oldest > boundary and not history.reached_start:
+            await history.load_until(boundary, max_pages=UNREAD_MAX_PAGES)
+        if history is not self._history:
+            return
+        unread = [m for m in history.messages if m["id"] > boundary and not m.get("is_outgoing")]
+        reached = history.reached_start or (history.messages
+                                           and history.messages[-1]["id"] <= boundary)
+        if not unread or not reached:
+            return  # too far back: open at the newest message as usual
+        self._first_unread = unread[-1]["id"]
+        self._row_changed(history.row_of(self._first_unread))
+        self.unreadReady.emit(self._first_unread)
+
+    async def _actions(self, chat_id: int, message: Message) -> None:
+        content = message.get("content", {})
+        has_text = bool((message_body(content) or {}).get("text"))
+        actions: dict[str, Any] = {
+            "canEdit": self._can_edit_guess(message),
+            "canDelete": True,
+            "canDeleteForAll": bool(message.get("is_outgoing")),
+            "canForward": not is_service(content),
+            "canReply": self.canWrite,
+            "canCopy": has_text,
+            "reactions": [] if is_service(content) else as_items(DEFAULT_REACTIONS[:QUICK]),
+            "allReactions": [] if is_service(content) else as_items(DEFAULT_REACTIONS),
+            "chosen": [r.key for r in message_reactions(message) if r.chosen],
+        }
+        ai = self._ai
+        props, available, context = await asyncio.gather(
+            self._client.send({"@type": "getMessageProperties", "chat_id": chat_id,
+                               "message_id": message["id"]}),
+            self._client.send({"@type": "getMessageAvailableReactions", "chat_id": chat_id,
+                               "message_id": message["id"], "row_size": 8}),
+            # Messages Explain / Suggest reply would send: shown in the menu beforehand.
+            ai.context_size(chat_id, message["id"]) if ai and ai.is_enabled(chat_id)
+            else asyncio.sleep(0, 0),
+            return_exceptions=True)
+        actions["aiContext"] = context if isinstance(context, int) else 0
+        if isinstance(props, dict):
+            actions.update(
+                canEdit=bool(props.get("can_be_edited")) and _has_text_field(content),
+                canDelete=bool(props.get("can_be_deleted_only_for_self")
+                               or props.get("can_be_deleted_for_all_users")),
+                canDeleteForAll=bool(props.get("can_be_deleted_for_all_users")),
+                canForward=bool(props.get("can_be_forwarded")),
+                canReply=bool(props.get("can_be_replied", True)) and self.canWrite,
+            )
+        if isinstance(available, dict):
+            keys = available_keys(available)
+            actions["reactions"] = as_items(keys[:QUICK])
+            actions["allReactions"] = as_items(keys)
+        history = self._history
+        if history is not None and history.chat_id == chat_id:
+            self.actionsReady.emit(message["id"], actions)
+
+    async def _start_edit(self, message: Message) -> None:
+        body = message_body(message.get("content", {})) or {
+            "@type": "formattedText", "text": "", "entities": []}
+        text = body.get("text", "")
+        if body.get("entities"):
+            try:
+                markdown = await self._client.send({"@type": "getMarkdownText", "text": body})
+                text = markdown.get("text", text)
+            except TdError as e:
+                log.debug("getMarkdownText failed, editing plain text: %s", e)
+        self.editReady.emit(message["id"], text)
+
+    async def _save_edit(self, chat_id: int, message: Message, text: str) -> None:
+        content = message.get("content", {})
+        formatted = await self._formatted(text)
+        if content.get("@type") == "messageText":
+            if not text.strip():
+                return
+            request: dict[str, Any] = {
+                "@type": "editMessageText", "chat_id": chat_id, "message_id": message["id"],
+                "reply_markup": None, "input_message_content": {
+                    "@type": "inputMessageText", "text": formatted,
+                    "link_preview_options": None, "clear_draft": False}}
+        else:
+            request = {
+                "@type": "editMessageCaption", "chat_id": chat_id, "message_id": message["id"],
+                "reply_markup": None, "caption": formatted,
+                "show_caption_above_media": bool(content.get("show_caption_above_media"))}
+        try:
+            edited = await self._client.send(request)
+        except TdError as e:
+            log.warning("Editing a message failed: %s", e)
+            return
+        history = self._history
+        if history and history.chat_id == chat_id and edited.get("id"):
+            history.add(edited)
+
+    async def _formatted(self, text: str) -> dict[str, Any]:
+        formatted: dict[str, Any] = {"@type": "formattedText", "text": text, "entities": []}
+        if not text:
+            return formatted
+        try:  # **bold**, __italic__, `code`, ```pre```, ~~strike~~, ||spoiler||, [text](url)
+            return await self._client.send({"@type": "parseMarkdown", "text": formatted})
+        except TdError as e:
+            log.debug("parseMarkdown failed, sending plain text: %s", e)
+            return formatted
+
+    async def _request(self, request: dict[str, Any], what: str) -> None:
+        try:
+            await self._client.send(request)
+        except TdError as e:
+            log.warning("%s failed: %s", what, e)
 
     async def _run_load(self, history: ChatHistory, load: Any) -> None:
         self._set_loading(True)
@@ -741,15 +1266,12 @@ class MessageListModel(QAbstractListModel):
             self.loadingChanged.emit()
 
     async def _send(self, chat_id: int, text: str, reply_to: int) -> None:
-        formatted: dict[str, Any] = {"@type": "formattedText", "text": text, "entities": []}
-        try:  # **bold**, __italic__, `code`, ```pre```, ~~strike~~, ||spoiler||, [text](url)
-            formatted = await self._client.send({"@type": "parseMarkdown", "text": formatted})
-        except TdError as e:
-            log.debug("parseMarkdown failed, sending plain text: %s", e)
+        formatted = await self._formatted(text)
         request: dict[str, Any] = {
             "@type": "sendMessage",
             "chat_id": chat_id,
-            "input_message_content": {"@type": "inputMessageText", "text": formatted},
+            "input_message_content": {"@type": "inputMessageText", "text": formatted,
+                                      "link_preview_options": None, "clear_draft": True},
         }
         if reply_to:
             request["reply_to"] = {"@type": "inputMessageReplyToMessage", "message_id": reply_to}
@@ -759,7 +1281,8 @@ class MessageListModel(QAbstractListModel):
             log.warning("sendMessage failed: %s", e)
             return
         history = self._history
-        if history and history.chat_id == chat_id and history.get(message["id"]) is None:
+        if (history and history.chat_id == chat_id and message.get("id")
+                and history.get(message["id"]) is None):
             history.add(message)  # usually already added by updateNewMessage
 
     def _spawn(self, awaitable: Any) -> None:
@@ -780,6 +1303,20 @@ def _display_size(media: Media) -> tuple[int, int]:
 
 def _default_name(kind: str) -> str:
     return {"voice": "Voice message", "audio": "Audio", "document": "File"}.get(kind, "")
+
+
+def is_image_path(path: str) -> bool:
+    """Sent as a photo (compressed); GIFs and everything else go as documents."""
+    return _suffix(path) in _IMAGE_EXTENSIONS and _suffix(path) != ".gif"
+
+
+def _has_text_field(content: dict[str, Any]) -> bool:
+    """Text messages and media with a caption field (possibly empty) can be edited."""
+    return content.get("@type") == "messageText" or "caption" in content
+
+
+def _now() -> float:
+    return datetime.now().timestamp()  # noqa: DTZ005
 
 
 def _suffix(path: str) -> str:

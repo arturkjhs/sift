@@ -13,6 +13,8 @@ APP_ID = "io.github.tgclient.TgClient"
 
 DEFAULT_SUMMARY_MODEL = "google/gemini-2.5-flash"
 DEFAULT_TRANSCRIPTION_MODEL = "google/gemini-2.5-flash"
+# Translation, smart-notification checks: many small requests.
+DEFAULT_CHEAP_MODEL = "google/gemini-2.5-flash-lite"
 # ~220 MB, 384 dims, ~50 languages including ru/uk/cs/en. Runs locally.
 DEFAULT_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
 
@@ -28,26 +30,34 @@ class Settings:
     openrouter_api_key: str = ""
     summary_model: str = DEFAULT_SUMMARY_MODEL
     transcription_model: str = DEFAULT_TRANSCRIPTION_MODEL
+    cheap_model: str = DEFAULT_CHEAP_MODEL
     embedding_model: str = DEFAULT_EMBEDDING_MODEL
     openrouter_key_source: str = ""  # "environment" (shell or ./.env) | "settings" | ""
+    # Folder of one account relative to data_dir; "" is the first account (the original layout).
+    account: str = ""
+
+    @property
+    def account_dir(self) -> Path:
+        base = self.data_dir / self.account if self.account else self.data_dir
+        return base / ("test" if self.use_test_dc else "prod")
 
     @property
     def database_dir(self) -> Path:
-        return self.data_dir / ("test" if self.use_test_dc else "prod") / "td_db"
+        return self.account_dir / "td_db"
 
     @property
     def files_dir(self) -> Path:
-        return self.data_dir / ("test" if self.use_test_dc else "prod") / "td_files"
+        return self.account_dir / "td_files"
 
     @property
     def ai_db_path(self) -> Path:
         """Our own SQLite: per-chat AI switches, transcripts, summaries (not messages)."""
-        return self.data_dir / ("test" if self.use_test_dc else "prod") / "ai.sqlite3"
+        return self.account_dir / "ai.sqlite3"
 
     @property
     def search_db_path(self) -> Path:
         """Search index: tokens and vectors only, no message text. Safe to delete."""
-        return self.data_dir / ("test" if self.use_test_dc else "prod") / "search.sqlite3"
+        return self.account_dir / "search.sqlite3"
 
     @property
     def models_dir(self) -> Path:
@@ -109,6 +119,7 @@ def load_settings() -> Settings:
         summary_model=os.environ.get("TGC_SUMMARY_MODEL", "").strip() or DEFAULT_SUMMARY_MODEL,
         transcription_model=(os.environ.get("TGC_TRANSCRIPTION_MODEL", "").strip()
                              or DEFAULT_TRANSCRIPTION_MODEL),
+        cheap_model=os.environ.get("TGC_CHEAP_MODEL", "").strip() or DEFAULT_CHEAP_MODEL,
         embedding_model=(os.environ.get("TGC_EMBEDDING_MODEL", "").strip()
                          or DEFAULT_EMBEDDING_MODEL),
     )

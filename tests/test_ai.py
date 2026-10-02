@@ -34,7 +34,8 @@ class OpenRouterTest(unittest.IsolatedAsyncioTestCase):
     async def test_every_request_is_pinned_to_zero_retention(self) -> None:
         router = FakeRouter("  hi  ")
         client = router.client()
-        self.assertEqual(await client.complete("m/x", [{"role": "user", "content": "q"}]), "hi")
+        reply = await client.complete("m/x", [{"role": "user", "content": "q"}])
+        self.assertEqual(reply.text, "hi")
         await client.transcribe("m/y", b"OggS", "ogg", "transcribe")
         await client.aclose()
         for body in router.requests:

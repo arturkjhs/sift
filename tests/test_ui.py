@@ -22,6 +22,7 @@ from fakes import (
 )
 
 from tgclient.config import Settings
+from tgclient.store.reactions import DEFAULT_REACTIONS
 
 VOICE_PATH = os.path.join(tempfile.gettempdir(), "tgc-test-voice.ogg")
 STICKER_COLORS = {301: "#E8A33D", 302: "#3FB295", 303: "#D4695B", 304: "#6C7F99"}
@@ -37,12 +38,49 @@ def _sticker(file_id: int, emoji: str) -> dict[str, Any]:
             "sticker": _file(file_id), "thumbnail": None}
 
 
+LONG_CHAT = 4
+PHOTO_PATH = os.path.join(tempfile.gettempdir(), "tgc-test-photo.png")
+
+
+def _long_history(req: dict[str, Any]) -> list[dict[str, Any]]:
+    """Chat 4: 80 messages, read up to 40 (opens on the separator, not at the bottom)."""
+    start = req["from_message_id"] or 81
+    ids = [i for i in range(start - 1, start - 1 - req["limit"], -1) if i >= 1]
+    messages = [{**_msg(i, f"Message number {i} " + "word " * (i % 7)), "chat_id": LONG_CHAT,
+                 "date": 1_700_000_000 + i * 60} for i in ids]
+    return [{"@type": "messages", "total_count": len(ids), "messages": messages,
+             "@extra": req["@extra"]}]
+
+
 def responder(req: dict[str, Any]) -> list[dict[str, Any]]:
     match req["@type"]:
+        case "getChatHistory" if req["chat_id"] == LONG_CHAT:
+            return _long_history(req)
+        case "getMessageProperties":
+            return [{"@type": "messageProperties", "can_be_edited": True,
+                     "can_be_deleted_only_for_self": True, "can_be_deleted_for_all_users": True,
+                     "can_be_forwarded": True, "can_be_replied": True, "@extra": req["@extra"]}]
+        case "getMessageAvailableReactions":
+            return [{"@type": "availableReactions", "@extra": req["@extra"], "top_reactions": [
+                {"type": {"@type": "reactionTypeEmoji", "emoji": e}}
+                for e in ("\U0001F44D", "\u2764", "\U0001F602", "\U0001F525")],
+                "recent_reactions": [], "popular_reactions": [
+                    {"type": {"@type": "reactionTypeEmoji", "emoji": e}}
+                    for e in DEFAULT_REACTIONS]}]
+        case "sendMessage" if req["input_message_content"]["@type"] == "inputMessagePhoto":
+            sent = {**_media(8, {"@type": "messagePhoto", "photo": {"sizes": []},
+                                 "caption": req["input_message_content"].get("caption")}),
+                    "is_outgoing": True}
+            return [{"@type": "updateNewMessage", "message": sent},
+                    {**sent, "@extra": req["@extra"]}]
         case "getMessage" if req["message_id"] == 5:
             return [{**_media(5, {"@type": "messageVoiceNote", "voice_note": {
                 "duration": 3, "waveform": "", "mime_type": "audio/ogg", "voice": _file(51)}}),
                 "@extra": req["@extra"]}]
+        case "getMessage" if req["chat_id"] == 1 and req["message_id"] in (1, 2, 3):
+            texts = {1: "Hi!", 2: "A longer message that should wrap inside the bubble.",
+                     3: "See you at the office"}
+            return [{**_msg(req["message_id"], texts[req["message_id"]]), "@extra": req["@extra"]}]
         case "downloadFile" if req["file_id"] in STICKER_COLORS:
             return [{**_file(req["file_id"]), "local": {
                 "path": _sticker_path(req["file_id"]), "is_downloading_completed": True},
@@ -79,6 +117,8 @@ def responder(req: dict[str, Any]) -> list[dict[str, Any]]:
             return [auth_state("authorizationStateReady"),
                     new_chat(1, "Olena", 300, unread_count=2),
                     new_chat(2, "Prague IT", 200, "chatTypeSupergroup"),
+                    new_chat(LONG_CHAT, "Book club", 100, "chatTypeSupergroup",
+                             unread_count=40, last_read_inbox_message_id=40),
                     ok(req)]
         case "loadChats":
             return [error(req, 404, "Not Found")]
@@ -142,6 +182,12 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         with open(VOICE_PATH, "wb") as f:
             f.write(b"OggS")
         qt_app()
+        from PySide6.QtGui import QColor as _QColor
+        from PySide6.QtGui import QImage as _QImage
+
+        photo = _QImage(320, 200, _QImage.Format.Format_RGB32)
+        photo.fill(_QColor("#6C7F99"))
+        photo.save(PHOTO_PATH)
         from PySide6.QtCore import Qt
         from PySide6.QtGui import QColor, QImage, QPainter
 
@@ -167,7 +213,33 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
                             use_test_dc=False, td_log_level=0, log_level="WARNING")
         from tgclient.services.ai_store import AiStore
 
-        router = FakeRouter("- Meet at the office [m3]\n- Bubble width discussion [m2, m1]")
+        def ai_reply(body: dict[str, Any]) -> str:
+            system = str(body["messages"][0]["content"])
+            if "understand one message" in system:
+                return ("## Суть\nОлена спрашивает про ширину пузыря [m2].\n"
+                        "## Чего хотят от тебя\nОтвета, подходит ли такой перенос строк.\n"
+                        "## Неясно\nО каком экране речь.")
+            if "draft replies" in system:
+                return ("ANALYSIS: Просит оценить перенос строк в пузыре\n"
+                        "### Согласиться\nYes, wrapping looks right to me.\n"
+                        "TRANSLATION: Да, по-моему перенос выглядит правильно.\n"
+                        "### Уточнить\nWhich screen size did you test?\n"
+                        "TRANSLATION: На каком размере экрана проверяла?\n"
+                        "### Перенести\nLet me check tonight and get back to you.\n"
+                        "TRANSLATION: Посмотрю вечером и отвечу.")
+            if "Translate" in system:
+                return "Ahoj! Uvidíme se v pátek."
+            if "extract agreed dates" in system:
+                return ('{"events": [{"title": "Office meetup", "start": "2026-03-13T18:00", '
+                        '"location": "Lucerna", "ref": "m3"}]}')
+            if "answer a question" in system:
+                return "At the office on Friday, see [m3]."
+            if "digest of several" in system:
+                return ("## Olena\n- Meeting at the office, link sent [m1]\n\n"
+                        "Nothing important: Book club")
+            return "- Meet at the office [m3]\n- Bubble width discussion [m2, m1]"
+
+        router = FakeRouter(ai_reply, cost=0.0031)
         from tgclient.services.search_index import SearchIndex
 
         session = Session(settings, lib=FakeLib(responder), ai_store=AiStore(":memory:"),
@@ -212,7 +284,7 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         await step_is("ready")
         await start
 
-        await wait_until(lambda: (pump(), session.chat_list.rowCount())[1] == 2)
+        await wait_until(lambda: (pump(), session.chat_list.rowCount())[1] == 3)
         pump()
 
         def find_list_views(item: QQuickItem) -> list[QQuickItem]:
@@ -223,7 +295,7 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
 
         views = find_list_views(window.contentItem())
         counts = sorted(v.property("count") for v in views)
-        self.assertIn(2, counts, f"chat list not rendered, ListView counts: {counts}")
+        self.assertIn(3, counts, f"chat list not rendered, ListView counts: {counts}")
         self.assertEqual(warnings, [], "QML warnings during run")
 
         # open a chat: messages render, sending adds a bubble, no binding loops
@@ -329,6 +401,200 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(picker.property("opened"))
         self.assertEqual(warnings, [], "QML warnings in the emoji/sticker picker")
 
+        # --- M8: translation in the bubble, the AI panel, composer translation, digest ------
+        session.ai.translate(2)
+        await wait_until(lambda: (pump(), session.ai_service.translation(1, 2))[1] is not None
+                         and session.ai_service.translation(1, 2).state == "done")
+        session.ai.openPanel("ask")
+        session.ai.ask("where do we meet?")
+        await wait_until(lambda: (pump(), session.ai.summaryState)[1] == "done")
+        await settle(0.1)
+        self.assertIn("tgc://message/3", session.ai.summaryText)
+        self.assertEqual(warnings, [], "QML warnings in the ask panel")
+        _screenshot(window, "ai-ask-translation")
+        from unittest import mock
+
+        with mock.patch("tgclient.services.ai.time.time", return_value=1_700_000_100):
+            session.ai.findEvents()  # the fake history is from 2023
+            await wait_until(lambda: (pump(), session.ai.summaryState)[1] == "done")
+        self.assertTrue(session.ai.hasEvents)
+        await settle(0.1)
+        _screenshot(window, "ai-events")
+        summary_menu = window.findChild(QObject, "smartConsent")
+        QMetaObject.invokeMethod(summary_menu, "open")
+        await settle()
+        _screenshot(window, "smart-consent")
+        QMetaObject.invokeMethod(summary_menu, "close")
+        await settle(0.15)
+        session.ai.translateDraft("Привет! Увидимся в пятницу.", "cs")
+        preview = find_item(window.contentItem(), "translationPreview")
+        await wait_until(lambda: (pump(), preview.isVisible())[1])
+        await settle(0.1)
+        _screenshot(window, "composer-translation")
+        assist_menu = window.findChild(QObject, "assistMenu")
+        QMetaObject.invokeMethod(assist_menu, "popup")
+        await settle()
+        _screenshot(window, "assist-menu")
+        QMetaObject.invokeMethod(assist_menu, "close")
+        await settle(0.15)
+        sent_texts = lambda: [r["input_message_content"].get("text", {}).get("text")
+                              for r in session.client._hub._lib.sent
+                              if r["@type"] == "sendMessage"]
+        QMetaObject.invokeMethod(find_item(window.contentItem(), "sendTranslation"), "clicked")
+        await wait_until(lambda: (pump(), "Ahoj! Uvidíme se v pátek." in sent_texts())[1])
+        pump()
+        self.assertFalse(preview.isVisible())
+        session.ai_service.set_flag(1, "digest", True)
+        digest_dialog = window.findChild(QObject, "digestDialog")
+        QMetaObject.invokeMethod(digest_dialog, "open")
+        with mock.patch("tgclient.services.ai.time.time", return_value=1_700_000_100):
+            session.ai.digest()
+            await wait_until(lambda: (pump(), session.ai.globalState)[1] == "done")
+        await settle()
+        self.assertIn("tgc://message/1/1", session.ai_service.summary(0, "digest").text)
+        _screenshot(window, "digest")
+        QMetaObject.invokeMethod(digest_dialog, "close")
+        await settle(0.15)
+        self.assertEqual(warnings, [], "QML warnings in M8 views")
+
+        # Explain a message, then suggest replies and insert one (not sent)
+        session.ai.explainMessage(2, "Olena")
+        await wait_until(lambda: (pump(), session.ai.summaryState)[1] == "done")
+        await settle(0.1)
+        self.assertIn("tgc://message/2", session.ai.summaryText)
+        _screenshot(window, "ai-explain")
+        session.ai.suggestReplies(2, "Olena")
+        await wait_until(lambda: (pump(), session.ai.summaryState)[1] == "done")
+        await settle(0.1)
+        self.assertEqual(len(session.ai.replyOptions), 3)
+        _screenshot(window, "ai-reply")
+        session.ai.insertOption(1)
+        pump()
+        self.assertEqual(message_view.property("replyToId"), 2)
+        composer_text = find_item(window.contentItem(), "composerInput").property("text")
+        self.assertEqual(composer_text, "Which screen size did you test?")
+        self.assertEqual(warnings, [], "QML warnings in explain / suggest reply")
+        message_view.setProperty("replyToId", 0)
+        QMetaObject.invokeMethod(find_item(window.contentItem(), "composerInput"), "clear")
+
+        # --- M7 -------------------------------------------------------------------------------
+        message_list = next(v for v in find_list_views(window.contentItem())
+                            if v.property("model") is session.messages)
+
+        # Reactions and a forwarded message in the feed; typing in the header and the chat list
+        reactions = {"@type": "messageInteractionInfo", "reactions": {
+            "@type": "messageReactions", "are_tags": False, "reactions": [
+                {"type": {"@type": "reactionTypeEmoji", "emoji": "👍"},
+                 "total_count": 3, "is_chosen": True},
+                {"type": {"@type": "reactionTypeEmoji", "emoji": "🔥"},
+                 "total_count": 1, "is_chosen": False}]}}
+        forwarded = {**_msg(9, "Forwarded with a reaction"), "forward_info": {
+            "origin": {"@type": "messageOriginHiddenUser", "sender_name": "Jana"}, "date": 1},
+            "interaction_info": reactions}
+        session.client._dispatch({"@type": "updateNewMessage", "message": forwarded})
+        session.client._dispatch({"@type": "updateMessageInteractionInfo", "chat_id": 1,
+                                  "message_id": 2, "interaction_info": reactions})
+        session.client._dispatch({"@type": "updateChatAction", "chat_id": 1, "topic_id": None,
+                                  "sender_id": {"@type": "messageSenderUser", "user_id": 5},
+                                  "action": {"@type": "chatActionTyping"}})
+        session.client._dispatch({"@type": "updateChatDraftMessage", "chat_id": 2,
+                                  "draft_message": {"@type": "draftMessage", "content": {
+                                      "@type": "draftMessageContentText",
+                                      "text": {"text": "see you at the meetup"}}},
+                                  "positions": []})
+        await settle(0.2)
+        self.assertEqual(session.messages.chatStatus, "typing…")
+        message_list.positionViewAtBeginning()
+        await settle(0.1)
+        self.assertEqual(warnings, [], "QML warnings with reactions and forwards")
+        _screenshot(window, "reactions-typing-draft")
+
+        # Context menu: actions come from TDLib first, then it pops up with quick reactions
+        message_menu = window.findChild(QObject, "messageMenu")
+        message_menu.setProperty("messageId", 3)
+        message_menu.setProperty("waiting", True)
+        session.messages.requestActions(3)
+        await wait_until(lambda: (pump(), message_menu.property("opened"))[1])
+        await settle()
+        self.assertTrue(message_menu.property("actions").get("canEdit"))
+        _screenshot(window, "menu-actions")
+        # the expand button: every reaction the chat allows, in a scrollable grid
+        QMetaObject.invokeMethod(message_menu, "openAllReactions")
+        await settle()
+        picker = window.findChild(QObject, "reactionPicker")
+        self.assertTrue(picker.property("opened"))
+        self.assertGreaterEqual(len(picker.property("reactions")), len(DEFAULT_REACTIONS))
+        _screenshot(window, "reaction-picker")
+        QMetaObject.invokeMethod(picker, "picked", Q_ARG("QVariant", 3),
+                                 Q_ARG(str, DEFAULT_REACTIONS[40]))
+        await wait_until(lambda: any(
+            r["@type"] == "addMessageReaction"
+            and r["reaction_type"]["emoji"] == DEFAULT_REACTIONS[40]
+            for r in session.client._hub._lib.sent))
+        QMetaObject.invokeMethod(picker, "close")
+        await settle(0.15)
+
+        # Editing: the composer switches to edit mode and back
+        composer = find_item(window.contentItem(), "composerInput")
+        session.messages.startEdit(3)
+        await wait_until(lambda: (pump(), composer.property("text"))[1].startswith("See"))
+        await settle(0.1)
+        _screenshot(window, "editing")
+        composer_root = composer.parentItem()
+        while composer_root is not None and composer_root.property("editingId") is None:
+            composer_root = composer_root.parentItem()
+        self.assertEqual(composer_root.property("editingId"), 3)
+        QMetaObject.invokeMethod(composer_root, "finishEdit")
+        pump()
+        self.assertEqual(composer_root.property("editingId"), 0)
+
+        # Delete and forward dialogs
+        delete_dialog = window.findChild(QObject, "deleteDialog")
+        QMetaObject.invokeMethod(delete_dialog, "ask", Q_ARG("QVariant", 3),
+                                 Q_ARG("QVariant", True))
+        await settle()
+        self.assertTrue(delete_dialog.property("opened"))
+        _screenshot(window, "delete")
+        QMetaObject.invokeMethod(delete_dialog, "close")
+        forward_dialog = window.findChild(QObject, "forwardDialog")
+        QMetaObject.invokeMethod(forward_dialog, "pick", Q_ARG("QVariant", 3))
+        await settle()
+        self.assertEqual(session.chat_picker.rowCount(), 3)
+        _screenshot(window, "forward")
+        QMetaObject.invokeMethod(forward_dialog, "close")
+        await settle(0.15)
+
+        # Files with a caption
+        session.composer.stage([PHOTO_PATH, VOICE_PATH])
+        send_files = window.findChild(QObject, "sendFilesDialog")
+        await settle()
+        self.assertTrue(send_files.property("opened"))
+        _screenshot(window, "send-files")
+        session.composer.unstage(1)
+        before = session.messages.rowCount()
+        QMetaObject.invokeMethod(send_files, "send")
+        await wait_until(lambda: (pump(), session.messages.rowCount())[1] == before + 1)
+        await settle(0.15)
+        self.assertFalse(send_files.property("opened"))
+        photo_request = [r for r in session.client._hub._lib.sent
+                         if r["@type"] == "sendMessage"][-1]
+        self.assertEqual(photo_request["input_message_content"]["@type"], "inputMessagePhoto")
+        self.assertEqual(warnings, [], "QML warnings in M7 dialogs")
+
+        # A chat with unread messages opens on the separator, not at the bottom
+        QMetaObject.invokeMethod(main_view, "openChat", Q_ARG("QVariant", LONG_CHAT),
+                                 Q_ARG("QVariant", 0))
+        await wait_until(lambda: (pump(), session.messages.rowOf(41))[1] >= 0
+                         and session.messages._first_unread == 41)
+        await settle(0.3)
+        separator = next(item for item in _all_items(message_list)
+                         if item.objectName() == "unreadSeparator" and item.isVisible())
+        top = separator.mapToItem(message_list, 0, 0).y()
+        self.assertTrue(0 <= top < 40,
+                        f"separator at {top}, list height {message_list.height()}")
+        _screenshot(window, "unread")
+        self.assertEqual(warnings, [], "QML warnings with the unread separator")
+
         settings_dialog = window.findChild(QObject, "settingsDialog")
         QMetaObject.invokeMethod(settings_dialog, "open")
         await settle()
@@ -336,8 +602,17 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         _screenshot(window, "settings")
         QMetaObject.invokeMethod(settings_dialog, "close")
 
+        from tgclient.app import dispose_engine
+
+        dispose_engine(engine)  # QML before the objects it binds to
         await session.close()
-        del engine
+
+
+def _all_items(item: Any) -> list[Any]:
+    found = [item]
+    for child in item.childItems():
+        found.extend(_all_items(child))
+    return found
 
 
 def _screenshot(window: Any, name: str) -> None:

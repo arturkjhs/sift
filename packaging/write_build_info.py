@@ -50,6 +50,10 @@ def main() -> None:
     ]
     if api_id and api_hash:
         lines += [f"TG_API_ID = {api_id!r}", f"TG_API_HASH = {api_hash!r}"]
+    # Where the app looks for updates (GitHub Releases); CI sets GITHUB_REPOSITORY itself.
+    repo = (os.environ.get("TGC_UPDATE_REPO") or os.environ.get("GITHUB_REPOSITORY", "")).strip()
+    if repo:
+        lines.append(f"UPDATE_REPO = {repo!r}")
     TARGET.write_text("\n".join(lines) + "\n")
     print(f"wrote {TARGET.relative_to(ROOT)} (version {version()})")
 

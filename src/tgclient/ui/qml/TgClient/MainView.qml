@@ -12,6 +12,16 @@ SplitView {
 
     signal settingsRequested()
 
+    // Another account: its own chats; nothing of the previous one stays selected.
+    Connections {
+        target: accounts
+        function onActiveChanged() {
+            root.selectedChatId = 0
+            searchField.clear()
+            list.positionViewAtBeginning()
+        }
+    }
+
     function openChat(chatId, messageId) {
         root.selectedChatId = chatId
         messages.open(chatId)
@@ -49,11 +59,22 @@ SplitView {
                 Layout.bottomMargin: 2
                 spacing: 4
 
+                AccountSwitcher {}
+
                 SearchBox {
                     id: searchField
                     Layout.fillWidth: true
                     placeholder: qsTr("Search chats and messages")
                     onEdited: text => search.query = text
+                }
+
+                IconButton {
+                    objectName: "digestButton"
+                    visible: ai.configured
+                    iconName: "inbox"
+                    glyphSize: 15
+                    Accessible.name: qsTr("Digest and promises")
+                    onClicked: digestDialog.open()
                 }
 
                 IconButton {
@@ -141,6 +162,41 @@ SplitView {
                 }
             }
 
+            // A new version: one quiet line above the chat list.
+            Rectangle {
+                objectName: "updateBanner"
+                Layout.fillWidth: true
+                implicitHeight: 36
+                visible: updates.state === "available" || updates.state === "ready"
+                color: Theme.selection
+
+                RowLayout {
+                    anchors.fill: parent
+                    anchors.leftMargin: 12
+                    anchors.rightMargin: 8
+                    spacing: 8
+                    Icon {
+                        name: "update"
+                        color: Theme.accent
+                        size: 16
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: updates.state === "ready" ? qsTr("Update ready")
+                              : qsTr("Version %1 is out").arg(updates.newVersion)
+                        elide: Text.ElideRight
+                        color: Theme.text
+                        font.pixelSize: Theme.fontSmall
+                    }
+                    PillButton {
+                        text: updates.state === "ready" ? qsTr("Restart")
+                              : updates.canInstall ? qsTr("Install") : qsTr("Details")
+                        filled: true
+                        onClicked: updates.state === "ready" ? updates.restart() : updates.install()
+                    }
+                }
+            }
+
             ListView {
                 id: list
                 Layout.fillWidth: true
@@ -184,6 +240,11 @@ SplitView {
         }
     }
 
+    DigestDialog {
+        id: digestDialog
+        onMessageRequested: (chatId, messageId) => root.openChat(chatId, messageId)
+    }
+
     Rectangle {
         SplitView.fillWidth: true
         color: Theme.window
@@ -192,6 +253,7 @@ SplitView {
             id: messageView
             anchors.fill: parent
             visible: root.selectedChatId !== 0
+            onOpenChatRequested: chatId => root.openChat(chatId, 0)
         }
 
         Text {

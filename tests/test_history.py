@@ -240,7 +240,7 @@ class MessageModelTest(HistoryCase):
 
     async def test_send_files_wraps_input_file(self) -> None:
         await self.open_loaded()
-        self.model.sendFiles(["/tmp/shot.png", "/tmp/notes.pdf"])
+        self.model.send_files([("/tmp/shot.png", "", 0), ("/tmp/notes.pdf", "", 0)])
         await wait_until(lambda: sum(r["@type"] == "sendMessage" for r in self.lib.sent) == 2)
         photo, doc = (r["input_message_content"] for r in self.lib.sent
                       if r["@type"] == "sendMessage")

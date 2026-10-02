@@ -19,12 +19,16 @@ class FakeLib:
         self._queue: queue.Queue[dict[str, Any]] = queue.Queue()
         self._responder = responder or (lambda req: [ok(req)])
         self.sent: list[dict[str, Any]] = []
+        self.sent_by: list[tuple[int, dict[str, Any]]] = []  # (client id, request)
+        self._next_client = 0
 
     def create_client_id(self) -> int:
-        return 1
+        self._next_client += 1  # several accounts share one hub (and this fake)
+        return self._next_client
 
     def send(self, client_id: int, request: dict[str, Any]) -> None:
         self.sent.append(request)
+        self.sent_by.append((client_id, request))
         for event in self._responder(request):
             self.push(event, client_id)
 
@@ -41,9 +45,11 @@ class FakeLib:
 class FakeRouter:
     """httpx transport standing in for OpenRouter: records requests, replies from a script."""
 
-    def __init__(self, reply: str = "ok", status: int = 200) -> None:
-        self.reply = reply
+    def __init__(self, reply: str | Callable[[dict[str, Any]], str] = "ok", status: int = 200,
+                 cost: float = 0.0) -> None:
+        self.reply = reply  # or a function of the request body
         self.status = status
+        self.cost = cost  # reported in `usage`, like OpenRouter's usage accounting
         self.requests: list[dict[str, Any]] = []
         self.headers: list[httpx.Headers] = []
         self.key_checks: list[str] = []
@@ -59,7 +65,21 @@ class FakeRouter:
         self.headers.append(request.headers)
         if self.status != 200:
             return httpx.Response(self.status, json={"error": {"message": "nope"}})
-        return httpx.Response(200, json={"choices": [{"message": {"content": self.reply}}]})
+        body = self.requests[-1]
+        reply = self.reply(body) if callable(self.reply) else self.reply
+        if body.get("stream"):  # server-sent events, a few characters per chunk
+            events = [": OPENROUTER PROCESSING", ""]
+            for start in range(0, len(reply), 7):
+                events += ["data: " + json.dumps({"choices": [{"delta": {
+                    "content": reply[start:start + 7]}}]}), ""]
+            events += ["data: " + json.dumps({"choices": [], "usage": {
+                "prompt_tokens": 100, "completion_tokens": 10, "cost": self.cost}}), "",
+                "data: [DONE]", ""]
+            return httpx.Response(200, content="\n".join(events).encode(),
+                                  headers={"content-type": "text/event-stream"})
+        return httpx.Response(200, json={
+            "choices": [{"message": {"content": reply}}],
+            "usage": {"prompt_tokens": 100, "completion_tokens": 10, "cost": self.cost}})
 
     def client(self, key: str = "sk-test") -> Any:
         from tgclient.services.openrouter import OpenRouter
@@ -134,6 +154,9 @@ def new_chat(chat_id: int, title: str, order: int = 0, kind: str = "chatTypePriv
     chat_type: dict[str, Any] = {"@type": kind}
     if kind == "chatTypeSupergroup":
         chat_type["is_channel"] = fields.pop("is_channel", False)
+        chat_type["supergroup_id"] = fields.pop("supergroup_id", chat_id)
+    elif kind in ("chatTypePrivate", "chatTypeSecret"):
+        chat_type["user_id"] = fields.pop("user_id", chat_id)
     chat = {"id": chat_id, "title": title, "type": chat_type,
             "positions": [position(order)] if order else [], **fields}
     return {"@type": "updateNewChat", "chat": chat}

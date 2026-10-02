@@ -22,3 +22,9 @@ ToggleSwitch 1.0 ToggleSwitch.qml
 SearchBox 1.0 SearchBox.qml
 SearchResultDelegate 1.0 SearchResultDelegate.qml
 EmojiStickerPicker 1.0 EmojiStickerPicker.qml
+ForwardDialog 1.0 ForwardDialog.qml
+SendFilesDialog 1.0 SendFilesDialog.qml
+DigestDialog 1.0 DigestDialog.qml
+AccountSwitcher 1.0 AccountSwitcher.qml
+MediaViewer 1.0 MediaViewer.qml
+ReactionPicker 1.0 ReactionPicker.qml

@@ -22,7 +22,7 @@ log = logging.getLogger(__name__)
 MAIN = "main"
 ARCHIVE = "archive"
 
-ChangeKind = Literal["chat", "folders", "unread"]
+ChangeKind = Literal["chat", "folders", "unread", "unread_messages"]
 Listener = Callable[[ChangeKind, Any], None]
 
 _SCOPE_BY_TYPE = {
@@ -77,6 +77,8 @@ class Chat:
     use_default_mute_for: bool = True
     last_read_outbox_message_id: int = 0
     last_read_inbox_message_id: int = 0
+    peer_id: int = 0  # user id (private, secret), basic group id or supergroup id
+    draft: dict[str, Any] | None = None  # TDLib draftMessage
 
 
 @dataclass
@@ -95,6 +97,7 @@ class ChatStore:
         # Display order, including the main list. Replaced on updateChatFolders.
         self.folders: list[Folder] = [Folder(key=MAIN, title="All chats")]
         self.unread: dict[str, int] = {}  # list key -> unread unmuted chats
+        self.unread_messages: dict[str, int] = {}  # list key -> unread unmuted messages
         self._scope_mute_for: dict[str, int] = {}
         self._file_owners: dict[int, set[int]] = {}  # file id -> chat ids using it as photo
         self._loading: set[str] = set()
@@ -111,10 +114,13 @@ class ChatStore:
             "updateChatReadInbox": self._on_read_inbox,
             "updateChatReadOutbox": self._on_read_outbox,
             "updateChatUnreadMentionCount": self._on_mention_count,
+            # Reading a message with a mention sends this one, not the update above.
+            "updateMessageMentionRead": self._on_mention_count,
             "updateChatNotificationSettings": self._on_notification_settings,
             "updateScopeNotificationSettings": self._on_scope_settings,
             "updateChatFolders": self._on_folders,
             "updateUnreadChatCount": self._on_unread_chat_count,
+            "updateUnreadMessageCount": self._on_unread_message_count,
         }
         for update_type, handler in handlers.items():
             client.on(update_type, handler)
@@ -228,6 +234,8 @@ class ChatStore:
             last_message=raw.get("last_message"),
             last_read_outbox_message_id=raw.get("last_read_outbox_message_id", 0),
             last_read_inbox_message_id=raw.get("last_read_inbox_message_id", 0),
+            peer_id=_peer_id(raw["type"]),
+            draft=raw.get("draft_message"),
         )
         self.chats[chat.id] = chat
         self._set_photo(chat, raw.get("photo"))
@@ -259,9 +267,11 @@ class ChatStore:
         self._update_chat(event["chat_id"], lambda c: self._apply_position(c, event["position"]))
 
     def _on_draft(self, event: Event) -> None:
-        self._update_chat(
-            event["chat_id"], lambda c: self._apply_positions(c, event.get("positions", []))
-        )
+        def apply(chat: Chat) -> None:
+            chat.draft = event.get("draft_message")
+            self._apply_positions(chat, event.get("positions", []))
+
+        self._update_chat(event["chat_id"], apply)
 
     def _on_read_inbox(self, event: Event) -> None:
         def apply(chat: Chat) -> None:
@@ -313,12 +323,38 @@ class ChatStore:
         self.unread[key] = event.get("unread_unmuted_count", 0)
         self._emit("unread", key)
 
+    def _on_unread_message_count(self, event: Event) -> None:
+        key = list_key(event["chat_list"])
+        self.unread_messages[key] = event.get("unread_unmuted_count", 0)
+        self._emit("unread_messages", key)
+
 
 def _folder_title(info: dict[str, Any]) -> str:
     name = info.get("name")
     if isinstance(name, dict):  # newer TDLib: chatFolderName { text: formattedText }
         return name.get("text", {}).get("text", "")
     return info.get("title", "")
+
+
+def _peer_id(type_obj: dict[str, Any]) -> int:
+    return int(type_obj.get("user_id") or type_obj.get("basic_group_id")
+               or type_obj.get("supergroup_id") or 0)
+
+
+def draft_text(draft: dict[str, Any] | None) -> str:
+    """Plain text of a TDLib draftMessage (any TDLib version), "" if none."""
+    if not draft:
+        return ""
+    content = draft.get("content") or draft.get("input_message_text") or {}
+    text = content.get("text")
+    return (text.get("text", "") if isinstance(text, dict) else text or "")
+
+
+def draft_reply_to(draft: dict[str, Any] | None) -> int:
+    reply_to = (draft or {}).get("reply_to") or {}
+    if reply_to.get("@type") == "inputMessageReplyToMessage":
+        return int(reply_to.get("message_id") or 0)
+    return int((draft or {}).get("reply_to_message_id") or 0)  # older TDLib
 
 
 def _chat_type(type_obj: dict[str, Any]) -> str:

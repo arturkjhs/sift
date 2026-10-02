@@ -189,7 +189,7 @@ class SearchModel(QAbstractListModel):
             if chat is None or row["kind"] == "section":
                 return ""
             if chat.photo_path and chat.photo_file_id is not None:
-                return f"image://tg/avatar/{chat.photo_file_id}"
+                return self._chats.files.url("avatar", chat.photo_file_id)
             self._chats.request_photo(chat.id)
             return ""
         name = role_name(role)

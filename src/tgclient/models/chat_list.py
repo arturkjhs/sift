@@ -22,8 +22,9 @@ from PySide6.QtCore import (
     Slot,
 )
 
-from ..store.chats import MAIN, ChatStore
+from ..store.chats import MAIN, ChatStore, draft_text
 from ..store.format import initials, message_preview, message_time
+from ..store.presence import PresenceStore, typing_text
 from ..store.users import UserStore
 
 AVATAR_COLORS = 7
@@ -44,16 +45,25 @@ class Role(IntEnum):
     Initials = auto()
     ColorIndex = auto()
     ChatType = auto()
+    Draft = auto()
+    Typing = auto()
+    Online = auto()
 
 
 class ChatListModel(QAbstractListModel):
     listKeyChanged = Signal()
     fullyLoadedChanged = Signal()
 
-    def __init__(self, store: ChatStore, users: UserStore, parent: Any = None) -> None:
+    def __init__(
+        self, store: ChatStore, users: UserStore, presence: PresenceStore | None = None,
+        parent: Any = None,
+    ) -> None:
         super().__init__(parent)
         self._store = store
         self._users = users
+        self._presence = presence
+        if presence is not None:
+            presence.subscribe(self._on_presence)
         self._list_key = MAIN
         self._rows: list[Key] = []
         self._keys: dict[int, Key] = {}
@@ -117,7 +127,7 @@ class ChatListModel(QAbstractListModel):
                 return bool(position and position.is_pinned)
             case Role.AvatarSource:
                 if chat.photo_path and chat.photo_file_id is not None:
-                    return f"image://tg/avatar/{chat.photo_file_id}"
+                    return self._store.files.url("avatar", chat.photo_file_id)
                 self._store.request_photo(chat.id)  # lazy: only for rows QML actually shows
                 return ""
             case Role.Initials:
@@ -126,7 +136,40 @@ class ChatListModel(QAbstractListModel):
                 return abs(chat.id) % AVATAR_COLORS
             case Role.ChatType:
                 return chat.type
+            case Role.Draft:
+                return " ".join(draft_text(chat.draft).split())[:120]
+            case Role.Typing:
+                if self._presence is None:
+                    return ""
+                return typing_text(self._presence.typing.get(chat.id, []), self._name,
+                                   chat.type in ("private", "secret"))
+            case Role.Online:
+                return (self._presence is not None and chat.type == "private"
+                        and chat.peer_id != self._users.my_id
+                        and self._presence.is_online(chat.peer_id))
         return None
+
+    def _name(self, key: int) -> str:
+        user = self._users.users.get(key)
+        if user is not None:
+            return user.full_name
+        chat = self._store.chats.get(key)
+        return chat.title if chat else ""
+
+    def _on_presence(self, kind: str, payload: Any) -> None:
+        if kind == "typing":
+            self._refresh(payload, [Role.Typing])
+        elif kind == "user":
+            for chat_id in self._keys:
+                chat = self._store.chats.get(chat_id)
+                if chat is not None and chat.type == "private" and chat.peer_id == payload:
+                    self._refresh(chat_id, [Role.Online])
+
+    def _refresh(self, chat_id: int, roles: list[int]) -> None:
+        key = self._keys.get(chat_id)
+        if key is not None:
+            index = self.index(bisect.bisect_left(self._rows, key))
+            self.dataChanged.emit(index, index, roles)
 
     # --- internals --------------------------------------------------------------------------
 

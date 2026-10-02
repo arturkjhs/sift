@@ -125,7 +125,7 @@ class StickerModel(QAbstractListModel):
         if track_set:
             self._set_thumbs.add(file_id)
         if self._files.path(file_id):
-            return f"image://tg/sticker/{file_id}"
+            return self._files.url("sticker", file_id)
         self._files.download(file_id, AUTO_PRIORITY)
         return ""
 

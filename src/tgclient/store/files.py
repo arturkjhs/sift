@@ -57,8 +57,10 @@ class FileState:
 
 
 class FileManager:
-    def __init__(self, client: TdClient) -> None:
+    def __init__(self, client: TdClient, account: str = "0") -> None:
         self._client = client
+        # Each TDLib instance numbers its files on its own: image URLs carry the account.
+        self.account = account
         self._files: dict[int, FileState] = {}
         self._requested: set[int] = set()
         self._versions: dict[int, int] = {}  # file id -> number of updateFile events seen
@@ -70,6 +72,10 @@ class FileManager:
     def subscribe(self, listener: FileListener) -> Callable[[], None]:
         self._listeners.append(listener)
         return lambda: self._listeners.remove(listener)
+
+    def url(self, kind: str, file_id: int) -> str:
+        """image://tg/<account>/<kind>/<file id> (see ui/images.py)."""
+        return f"image://tg/{self.account}/{kind}/{file_id}"
 
     def get(self, file_id: int) -> FileState | None:
         return self._files.get(file_id)

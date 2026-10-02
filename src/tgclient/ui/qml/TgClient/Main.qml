@@ -17,7 +17,20 @@ ApplicationWindow {
         shell.requestQuit()
     }
 
+    // Click on a system notification: bring the window up and open that chat.
+    Connections {
+        target: accounts
+        function onChatRequested(chatId) {
+            window.show()
+            window.raise()
+            window.requestActivate()
+            if (loader.item && loader.item.objectName === "mainView")
+                loader.item.openChat(chatId, 0)
+        }
+    }
+
     Loader {
+        id: loader
         anchors.fill: parent
         sourceComponent: auth.step === "ready" ? mainView : authView
     }
@@ -37,4 +50,6 @@ ApplicationWindow {
     SettingsDialog {
         id: settingsDialog
     }
+
+    MediaViewer {}
 }

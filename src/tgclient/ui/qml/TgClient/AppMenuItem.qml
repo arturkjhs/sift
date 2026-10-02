@@ -23,7 +23,9 @@ MenuItem {
 
     background: Rectangle {
         radius: 6
-        color: root.highlighted && root.enabled ? Theme.hover : "transparent"
+        // Inside a Menu the menu highlights; used in a plain popup, hover does.
+        color: (root.highlighted || (root.hovered && !root.menu)) && root.enabled
+               ? Theme.hover : "transparent"
     }
 
     contentItem: RowLayout {

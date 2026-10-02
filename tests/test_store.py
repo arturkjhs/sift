@@ -57,6 +57,15 @@ class ChatStoreTest(StoreTestCase):
                          "position": position(10, "chatListArchive")})
         self.assertEqual([c.id for c in self.store.chats_in(ARCHIVE)], [2])
 
+    async def test_mention_badge_clears_when_the_mention_is_read(self) -> None:
+        await self.push(new_chat(1, "Team", 300, unread_mention_count=1))
+        self.assertEqual(self.store.chats[1].unread_mention_count, 1)
+        # what TDLib sends after viewMessages covers the message that mentioned the user
+        await self.push({"@type": "updateMessageMentionRead", "chat_id": 1, "message_id": 77,
+                         "unread_mention_count": 0})
+        self.assertEqual(self.store.chats[1].unread_mention_count, 0)
+        self.assertIn(("chat", 1), self.events)
+
     async def test_scope_mute(self) -> None:
         await self.push(new_chat(1, "Group", 1, "chatTypeBasicGroup",
                                  notification_settings={"use_default_mute_for": True}))

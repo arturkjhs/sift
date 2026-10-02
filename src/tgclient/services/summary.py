@@ -11,7 +11,7 @@ import logging
 import re
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
@@ -37,7 +37,7 @@ You summarize a Telegram chat for one of its participants, who hasn't read it.
 Input: one message per line, formatted `[m<id>] <date time> <sender>: <text>`.
 
 Rules:
-- Write in the language most of the chat is written in.
+- Write in {language}, whatever language the chat is in.
 - Group by topic. Use short markdown bullet points, no preamble, no closing remarks.
 - Put decisions, open questions, requests addressed to the reader, dates and deadlines first.
 - After every bullet cite the messages it is based on as [m<id>] or [m<id>, m<id>].
@@ -53,12 +53,15 @@ You write a short profile of one participant of a Telegram chat for another part
 Input: their messages, one per line, formatted `[m<id>] <date time> <name>: <text>`.
 
 Rules:
-- Write in the language most of the messages are written in.
-- Markdown. Use these sections as `##` headings with short bullet points, and skip a section
-  when the messages say nothing about it:
-  Who they are (role, work, place, background they mention);
-  Topics and interests; What they know well; Plans, promises and requests (with dates);
-  How they communicate.
+- Write in {language}, whatever language the messages are in.
+- Markdown: `##` sections with short bullet points, headings written exactly as given (the
+  part in parentheses says what goes in, never copy it); skip a section the messages say
+  nothing about:
+  ## {H:who} (role, work, place, background they mention)
+  ## {H:topics}
+  ## {H:knows}
+  ## {H:plans} (with dates)
+  ## {H:style}
 - After every bullet cite the messages it is based on as [m<id>] or [m<id>, m<id>].
   Use only ids that appear in the input. Cite at most 3 ids per bullet.
 - Only facts the person stated or that clearly follow from their messages. Do not guess,
@@ -70,9 +73,12 @@ Rules:
 @dataclass(frozen=True)
 class Source:
     """What the summary was built from (shown to the user, used for links)."""
-    times: dict[int, str]  # message id -> "HH:MM" label for its link
+    times: dict[int, str]  # cited id -> label for its link ("HH:MM")
     count: int
     truncated: bool
+    # Cited id -> link target "<chat id>/<message id>" when results span chats (the cited
+    # ids are then short references, not message ids). Empty: ids are messages of one chat.
+    targets: dict[int, str] = field(default_factory=dict)
 
 
 def stop_condition(scope: str, last_read_inbox_id: int,
@@ -168,19 +174,26 @@ def render(
                                    truncated=len(kept) < len(lines))
 
 
-def prompt(chat_title: str, reader: str, transcript_text: str) -> list[dict[str, Any]]:
+def _localize(text: str, language: str) -> str:
+    from .assist import localize
+
+    return localize(text, language)
+
+
+def prompt(chat_title: str, reader: str, transcript_text: str,
+           language: str = "en") -> list[dict[str, Any]]:
     header = f"Chat: {chat_title}\nReader: {reader or 'unknown'}\n\n"
     return [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": _localize(SYSTEM_PROMPT, language)},
         {"role": "user", "content": header + transcript_text},
     ]
 
 
 def person_prompt(chat_title: str, name: str, reader: str,
-                  transcript_text: str) -> list[dict[str, Any]]:
+                  transcript_text: str, language: str = "en") -> list[dict[str, Any]]:
     header = f"Chat: {chat_title}\nPerson: {name or 'unknown'}\nReader: {reader or 'unknown'}\n\n"
     return [
-        {"role": "system", "content": PERSON_PROMPT},
+        {"role": "system", "content": _localize(PERSON_PROMPT, language)},
         {"role": "user", "content": header + transcript_text},
     ]
 
@@ -194,7 +207,8 @@ def linkify(text: str, source: Source) -> str:
             message_id = int(token[1:])
             label = source.times.get(message_id)
             if label is not None:
-                links.append(f"[{label}]({LINK_SCHEME}{message_id})")
+                target = source.targets.get(message_id, str(message_id))
+                links.append(f"[{label}]({LINK_SCHEME}{target})")
         return " ".join(links)
 
     linked = _CITATION.sub(replace, text)
@@ -218,11 +232,38 @@ def sender_object(key: str) -> dict[str, Any] | None:
 
 
 def message_id_from_link(link: str) -> int:
-    if link.startswith(LINK_SCHEME):
-        tail = link[len(LINK_SCHEME):]
-        if tail.isdigit():
-            return int(tail)
-    return 0
+    return parse_message_link(link)[1]
+
+
+def parse_message_link(link: str) -> tuple[int, int]:
+    """tgc://message/<id> -> (0, id): the open chat; tgc://message/<chat>/<id> -> (chat, id)."""
+    if not link.startswith(LINK_SCHEME):
+        return 0, 0
+    parts = link[len(LINK_SCHEME):].split("/")
+    try:
+        if len(parts) == 1:
+            return 0, int(parts[0])
+        if len(parts) == 2:
+            return int(parts[0]), int(parts[1])
+    except ValueError:
+        pass
+    return 0, 0
+
+
+def message_line(message: Message, sender: str,
+                 transcript: Callable[[Message], str | None] = lambda m: None) -> str:
+    """'<date time> <sender>: <text>' without the [m<id>] prefix; "" for empty messages."""
+    text = _message_text(message, transcript)
+    if not text:
+        return ""
+    stamp = datetime.fromtimestamp(message.get("date", 0))  # noqa: DTZ006
+    return f"{stamp:%Y-%m-%d %H:%M} {sender or 'Unknown'}: {text}"
+
+
+def message_text(message: Message,
+                 transcript: Callable[[Message], str | None] = lambda m: None) -> str:
+    """One-line text of a message as the model sees it (captions, transcripts, reply marks)."""
+    return _message_text(message, transcript)
 
 
 def _message_text(message: Message, transcript: Callable[[Message], str | None]) -> str:

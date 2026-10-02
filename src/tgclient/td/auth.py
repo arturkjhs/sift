@@ -18,6 +18,10 @@ from .client import Event, TdClient, TdError
 
 log = logging.getLogger(__name__)
 
+# ask_phone() may answer this instead of a number: log in by scanning a QR code with a phone
+# where the account is already signed in (requestQrCodeAuthentication).
+QR_LOGIN = "\x00qr"
+
 # How long to wait after a rejected input for a possible state change before re-prompting
 # (e.g. too many wrong codes moves TDLib back to WaitPhoneNumber).
 _STATE_SETTLE_DELAY = 0.2
@@ -108,7 +112,9 @@ class AuthFlow:
             case "authorizationStateWaitPhoneNumber":
                 await self._prompt_and_send(
                     ui.ask_phone,
-                    lambda v: {"@type": "setAuthenticationPhoneNumber", "phone_number": v},
+                    lambda v: {"@type": "requestQrCodeAuthentication", "other_user_ids": []}
+                    if v == QR_LOGIN
+                    else {"@type": "setAuthenticationPhoneNumber", "phone_number": v},
                 )
 
             case "authorizationStateWaitEmailAddress":
@@ -143,7 +149,9 @@ class AuthFlow:
                 )
 
             case "authorizationStateWaitOtherDeviceConfirmation":
-                await ui.show_link(state.get("link", ""))  # next state arrives on its own
+                # tg://login?token=...: shown as a QR code; TDLib sends a fresh link when the
+                # token expires, and the next state once the phone confirms.
+                await ui.show_link(state.get("link", ""))
 
             case "authorizationStateWaitRegistration":
                 raise AuthError(
