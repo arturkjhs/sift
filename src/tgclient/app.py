@@ -121,6 +121,7 @@ class Session:
             monthly_limit=float(self.prefs.get("ai_monthly_limit") or 0.0),
             translate_to=(self.prefs.get("ai_language") or self.prefs.get("translate_to")
                           or system_language()),
+            read_languages=tuple(self.prefs.get("read_languages") or ()),
         )
         self.ai = AiController(self.ai_service, self.chats, prefs=self.prefs)
         self.custom_emoji = CustomEmojiStore(self.client, self.files)

@@ -1,7 +1,7 @@
 """Prompts and parsers for the M8 assistant features. Qt-free, no I/O.
 
 Everything here builds on summary.py's convention: the model sees messages as
-`[m<id>] <date time> <sender>: <text>` and cites them as [m<id>]; `summary.linkify` turns the
+`[m<id>] <time> <sender>: <text>` and cites them as [m<id>]; `summary.linkify` turns the
 citations into links. Results that span chats use short references (m1, m2, ...) whose link
 targets carry the chat id (summary.Source.targets).
 """
@@ -29,12 +29,13 @@ TONES = {
 }
 
 CITE_RULE = ("After every statement cite the messages it is based on as [m<id>] or "
-             "[m<id>, m<id>]. Use only ids that appear in the input. Cite at most 3 ids.")
+             "[m<id>, m<id>]: at most 2, the most telling ones first. Use only ids that "
+             "appear in the input.")
 
 
 # Bump when the explain / reply prompts change: their cache is keyed by the message, not by
 # the prompt text, so old answers would otherwise come back.
-PROMPT_VERSION = 2
+PROMPT_VERSION = 4
 
 # Fixed words of AI output (section headings, table headers, set phrases) in each language.
 # Given to the model ready-made: asked to translate an English heading, it often copied the
@@ -45,30 +46,32 @@ L10N: dict[str, dict[str, str]] = {
            "topics": "Теми й інтереси", "knows": "У чому розбирається",
            "plans": "Плани, обіцянки й прохання", "style": "Як спілкується",
            "nothing": "Нічого важливого", "no_answer": "Без відповіді", "person": "Хто",
-           "answer": "Відповідь", "source": "Джерело",
+           "answer": "Відповідь", "position": "Позиція",
            "classes": "Так / Ні / Можливо / Інше",
-           "no_events": "Домовлених дат і зустрічей не знайдено."},
+           "no_events": "Домовлених дат і зустрічей не знайдено.", "for_you": "Стосується тебе"},
     "ru": {"gist": "Суть", "want": "Чего от тебя хотят", "context": "Контекст",
            "tone": "Тон", "unclear": "Что неясно", "who": "Кто это",
            "topics": "Темы и интересы", "knows": "В чём разбирается",
            "plans": "Планы, обещания и просьбы", "style": "Как общается",
            "nothing": "Ничего важного", "no_answer": "Без ответа", "person": "Кто",
-           "answer": "Ответ", "source": "Источник", "classes": "Да / Нет / Может быть / Другое",
-           "no_events": "Договорённых дат и встреч не найдено."},
+           "answer": "Ответ", "position": "Позиция",
+           "classes": "Да / Нет / Может быть / Другое",
+           "no_events": "Договорённых дат и встреч не найдено.", "for_you": "Касается тебя"},
     "cs": {"gist": "Podstata", "want": "Co od tebe chtějí", "context": "Kontext",
            "tone": "Tón", "unclear": "Co je nejasné", "who": "Kdo to je",
            "topics": "Témata a zájmy", "knows": "V čem se vyzná",
            "plans": "Plány, sliby a prosby", "style": "Jak komunikuje",
            "nothing": "Nic důležitého", "no_answer": "Bez odpovědi", "person": "Kdo",
-           "answer": "Odpověď", "source": "Zdroj", "classes": "Ano / Ne / Možná / Jiné",
-           "no_events": "Žádná domluvená data ani schůzky."},
+           "answer": "Odpověď", "position": "Postoj", "classes": "Ano / Ne / Možná / Jiné",
+           "no_events": "Žádná domluvená data ani schůzky.", "for_you": "Týká se tebe"},
     "en": {"gist": "Gist", "want": "What they want from you", "context": "Context",
            "tone": "Tone", "unclear": "Unclear", "who": "Who they are",
            "topics": "Topics and interests", "knows": "What they know well",
            "plans": "Plans, promises and requests", "style": "How they communicate",
            "nothing": "Nothing important", "no_answer": "No answer", "person": "Person",
-           "answer": "Answer", "source": "Source", "classes": "Yes / No / Maybe / Other",
-           "no_events": "No agreed dates or meetings found."},
+           "answer": "Answer", "position": "Position",
+           "classes": "Yes / No / Maybe / Other",
+           "no_events": "No agreed dates or meetings found.", "for_you": "For you"},
 }
 
 
@@ -116,7 +119,7 @@ ASK_PROMPT = f"""\
 You answer a question about a Telegram chat for one of its participants (the reader), using
 only the chat messages in the input (found by search, so they may be out of order or partial).
 
-Input: the question, then messages formatted `[m<id>] <date time> <sender>: <text>`.
+Input: the question, then messages formatted `[m<id>] <time> <sender>: <text>`.
 
 Rules:
 - Answer in {{language}}. Be brief: a sentence or a few bullet points.
@@ -127,8 +130,10 @@ Rules:
 
 def ask_prompt(chat_title: str, reader: str, question: str, lines: str,
                language: str = "en") -> list[dict[str, Any]]:
-    return system_user(_lang(ASK_PROMPT, language), f"Chat: {chat_title}\nReader: {reader or 'unknown'}\n"
-                                   f"Question: {question}\n\nMessages:\n{lines}")
+    return system_user(_lang(ASK_PROMPT, language),
+                       f"{summary.today_header()}\nChat: {chat_title}\n"
+                       f"Reader: {reader or 'unknown'}\nQuestion: {question}\n\n"
+                       f"Messages:\n{lines}")
 
 
 # --- dates, meetings, .ics ------------------------------------------------------------------
@@ -136,7 +141,7 @@ def ask_prompt(chat_title: str, reader: str, question: str, lines: str,
 EVENTS_PROMPT = """\
 You extract agreed dates, meetings, deadlines and appointments from a Telegram chat.
 
-Input: messages formatted `[m<id>] <date time> <sender>: <text>`. Resolve relative dates
+Input: messages formatted `[m<id>] <time> <sender>: <text>`. Resolve relative dates
 ("tomorrow", "next Friday") against the date of the message that mentions them.
 
 Output only JSON, no code fences: {"events": [{"title": "...", "start": "YYYY-MM-DDTHH:MM" or
@@ -148,7 +153,8 @@ Write titles and notes in {language}. Empty list if there are none.
 
 
 def events_prompt(chat_title: str, lines: str, language: str = "en") -> list[dict[str, Any]]:
-    return system_user(_lang(EVENTS_PROMPT, language), f"Chat: {chat_title}\n\n{lines}")
+    return system_user(_lang(EVENTS_PROMPT, language),
+                       f"{summary.today_header()}\nChat: {chat_title}\n\n{lines}")
 
 
 @dataclass(frozen=True)
@@ -271,26 +277,46 @@ ANSWERS_PROMPT = f"""\
 Someone asked a question (or made a call: a poll, an invitation, a request) in a Telegram
 group. Find out how each participant answered.
 
-Input: the question message, the messages that came after it, and the list of members.
-Messages are formatted `[m<id>] <date time> <sender>: <text>`.
+Input: the question message and the messages that came after it, formatted
+`[m<id>] <time> <sender>: <text>`{{addressees_input}}.
 
 Output markdown:
 1. One line restating the question.
-2. A table `| {{H:person}} | {{H:answer}} | {{H:source}} |` (exactly this header) with one row
-   per person who answered: the answer class first ({{H:classes}}), then a few words of what
-   they said, and the cited message as [m<id>] in the last column. Group rows by answer class.
-3. A line `**{{H:no_answer}}:** name, name, …` listing members who didn't respond (skip the
-   asker).
+2. A table with exactly this header: `| {{H:person}} | {{H:position}} | {{H:answer}} |`, one row
+   per person who answered, grouped by position:
+   - {{H:person}}: the sender's name exactly as written in their message, never a position;
+   - {{H:position}}: one of {{H:classes}};
+   - {{H:answer}}: a few words of what they said, then its citation [m<id>].
+{{no_answer_rule}}
 - Messages unrelated to the question are not answers. {CITE_RULE}
 - Write in {{language}} (the table too).
 """
 
+NO_ANSWER_RULE = """\
+3. A line `**{H:no_answer}:** name, name, …` with the people from "Addressed to" who didn't
+   answer; leave it out if all of them did."""
+NO_LIST_RULE = "- Do not list who didn't answer: it is not known who was asked."
+
 
 def answers_prompt(chat_title: str, question_line: str, lines: str,
-                   members: list[str], language: str = "en") -> list[dict[str, Any]]:
-    roster = ", ".join(members) if members else "(unknown)"
-    return system_user(_lang(ANSWERS_PROMPT, language), f"Chat: {chat_title}\nQuestion: {question_line}\n\n"
-                                       f"Messages after it:\n{lines}\n\nMembers: {roster}")
+                   addressees: list[str], language: str = "en") -> list[dict[str, Any]]:
+    """`addressees`: who the question was for (mentioned people, or all members of a small
+    group), without bots and the asker; empty when that isn't known (a big group)."""
+    system = (ANSWERS_PROMPT
+              .replace("{addressees_input}",
+                       ", and the people it was addressed to" if addressees else "")
+              .replace("{no_answer_rule}", NO_ANSWER_RULE if addressees else NO_LIST_RULE))
+    tail = f"\n\nAddressed to: {', '.join(addressees)}" if addressees else ""
+    return system_user(_lang(system, language),
+                       f"{summary.today_header()}\nChat: {chat_title}\n"
+                       f"Question: {question_line}\n\nMessages after it:\n{lines}{tail}")
+
+
+def drop_no_answer(text: str, language: str) -> str:
+    """Removes a "No answer: …" line the model wrote although no addressees were given."""
+    label = word(language, "no_answer").casefold()
+    return "\n".join(line for line in text.split("\n")
+                     if not line.strip().strip("*_ ").casefold().startswith(label)).strip()
 
 
 # --- across chats: digest and promises ------------------------------------------------------
@@ -300,7 +326,7 @@ You write a digest of several Telegram chats for their reader: what matters sinc
 looked.
 
 Input: chats as `## <chat title>` sections with messages formatted
-`[m<ref>] <date time> <sender>: <text>`.
+`[m<ref>] <time> <sender>: <text>`.
 
 Rules:
 - Markdown: a `##` heading per chat that has something worth knowing, most important chats
@@ -316,7 +342,7 @@ You find what the reader promised to other people in Telegram chats: things they
 would do, send, check, pay, attend — that others may be waiting for.
 
 Input: chats as `## <chat title>` sections. Lines marked `(me)` are the reader's messages;
-others give context. Messages are formatted `[m<ref>] <date time> <sender>: <text>`.
+others give context. Messages are formatted `[m<ref>] <time> <sender>: <text>`.
 
 Rules:
 - Markdown bullets: `**to whom** — what, by when (if said)` and the citation of the reader's
@@ -360,32 +386,36 @@ def render_multi(
             kept.append((block, chosen))
 
     sections: list[list[str]] = []
-    times: dict[int, str] = {}
+    times: dict[int, int] = {}
     targets: dict[int, str] = {}
+    senders: dict[int, str] = {}
     ref = 0
     for block, chosen in kept:  # references numbered in reading order
         lines = [f"## {block.title}"]
         for message, line in chosen:
             ref += 1
-            stamp = datetime.fromtimestamp(message.get("date", 0))  # noqa: DTZ006
-            times[ref] = f"{stamp:%d.%m %H:%M}"
+            times[ref] = message.get("date", 0)
             targets[ref] = f"{block.chat_id}/{message['id']}"
+            senders[ref] = sender_name(message)
             marker = " (me)" if mine(message) else ""
             lines.append(f"[m{ref}]{marker} {line}")
         sections.append(lines)
     text = "\n\n".join("\n".join(section) for section in sections)
     count = len(times)
-    return text, Source(times=times, count=count, truncated=False, targets=targets)
+    return text, Source(times=times, count=count, truncated=False, targets=targets,
+                        senders=senders)
 
 
 def digest_prompt(reader: str, text: str, since: str,
                   language: str = "en") -> list[dict[str, Any]]:
     return system_user(_lang(DIGEST_PROMPT, language),
-                       f"Reader: {reader or 'unknown'}\nSince: {since}\n\n{text}")
+                       f"{summary.today_header()}\nReader: {reader or 'unknown'}\n"
+                       f"Since: {since}\n\n{text}")
 
 
 def promises_prompt(reader: str, text: str, language: str = "en") -> list[dict[str, Any]]:
-    return system_user(_lang(PROMISES_PROMPT, language), f"Reader: {reader or 'unknown'}\n\n{text}")
+    return system_user(_lang(PROMISES_PROMPT, language),
+                       f"{summary.today_header()}\nReader: {reader or 'unknown'}\n\n{text}")
 
 
 # --- reply suggestions, relevance -----------------------------------------------------------
@@ -394,7 +424,7 @@ REPLY_PROMPT = """\
 You draft the reader's next message in a Telegram chat. The reader will edit and send it
 themselves.
 
-Input: the recent messages formatted `<date time> <sender>: <text>`, oldest first, and
+Input: the recent messages formatted `<time> <sender>: <text>`, oldest first, and
 optionally the message to reply to.
 
 Rules: write as the reader, in the language the chat uses with them, matching how the reader
@@ -408,8 +438,8 @@ def reply_prompt(chat_title: str, reader: str, lines: str, tone: str,
                  reply_to: str = "") -> list[dict[str, Any]]:
     system = REPLY_PROMPT.format(tone=TONES.get(tone, TONES["neutral"]))
     target = f"\n\nReply to: {reply_to}" if reply_to else ""
-    return system_user(system, f"Chat: {chat_title}\nReader: {reader or 'unknown'}\n\n"
-                               f"{lines}{target}")
+    return system_user(system, f"{summary.today_header()}\nChat: {chat_title}\n"
+                               f"Reader: {reader or 'unknown'}\n\n{lines}{target}")
 
 
 RELEVANCE_PROMPT = """\
@@ -425,8 +455,8 @@ involve them. Output only "yes" or "no".
 def relevance_prompt(reader: str, chat_title: str, context: str,
                      new_line: str) -> list[dict[str, Any]]:
     return system_user(RELEVANCE_PROMPT,
-                       f"Reader: {reader or 'unknown'}\nChat: {chat_title}\n\n"
-                       f"Earlier messages:\n{context or '(none)'}\n\nNew message:\n{new_line}")
+                       f"{summary.today_header()}\nReader: {reader or 'unknown'}\n"
+                       f"Chat: {chat_title}\n\nEarlier messages:\n{context or '(none)'}\n\nNew message:\n{new_line}")
 
 
 def is_yes(reply: str) -> bool:
@@ -496,12 +526,24 @@ NO_GUESSING = """\
 EXPLAIN_PROMPT = f"""\
 You help the reader understand one message in a Telegram chat (marked >>> in the input).
 
-Input: optionally an earlier summary of the chat, the reply chain the message belongs to, and
-messages around it (before and after), formatted `[m<id>] <date time> <sender>: <text>`.
+Input: optionally an earlier summary of the chat, the reply chain the message belongs to,
+messages around it (before and after), formatted `[m<id>] <time> <sender>: <text>`, and the
+reactions this chat allows.
 
-Output markdown in {{language}} with these `##` sections in this order. Write each heading
+First decide what kind of message it is and write it on the first line, exactly:
+KIND: actionable | informational | light
+  actionable: asks the reader something, wants an action or a decision, or has a deadline;
+  informational: news, facts or plans, nothing asked of the reader;
+  light: a joke, emoji, agreement, thanks, small talk — no question and no request.
+For a light message only, add two more lines right after it:
+REACTIONS: <2 or 3 emoji from the allowed reactions that fit it, separated by spaces>
+REPLY: <one short casual reply in tone, in the language the chat uses, as the reader>
+
+Then markdown in {{language}} with these `##` sections in this order. Write each heading
 exactly as given below, nothing after it on that line (the part in parentheses tells you what
-goes into the section, never copy it). Leave out any section you have nothing real for:
+goes into the section, never copy it). Leave out any section you have nothing real for.
+For a light message write only {{H:gist}} in one line and {{H:context}} only if the message
+refers to something earlier; no other sections, no analysis of the joke or the tone:
 ## {{H:gist}}
   (one or two sentences: what the message says; most useful for long or messy ones)
 ## {{H:want}}
@@ -530,8 +572,9 @@ Output exactly this plain-text format, nothing else:
 ANALYSIS: <one or two short lines in {{language}}: what is asked of the reader>
 ### <strategy label in {{language}}, e.g. agree / ask to clarify / decline politely / postpone>
 <the reply, ready to send>
-TRANSLATION: <the reply translated into {{language}}; omit this line if the reply is already in
-{{language}}>
+LANG: <ISO 639-1 code of the reply's language, e.g. uk>
+TRANSLATION: <the reply translated into {{language}}; omit this line if the reply is in
+{{reads}}: the reader reads those>
 (repeat ### blocks: {{count}} options, each a genuinely different strategy, not rewordings)
 
 Rules for the replies:
@@ -568,7 +611,8 @@ def message_context(
 ) -> MessageContext:
     """Reply chain (oldest first) + messages around (oldest first, the target marked >>>)."""
     seen: set[int] = set()
-    times: dict[int, str] = {}
+    times: dict[int, int] = {}
+    senders: dict[int, str] = {}
     lines_chain: list[str] = []
     lines_around: list[str] = []
     target_line = ""
@@ -580,8 +624,8 @@ def message_context(
             if not line:
                 continue
             seen.add(message["id"])
-            stamp = datetime.fromtimestamp(message.get("date", 0))  # noqa: DTZ006
-            times[message["id"]] = f"{stamp:%d.%m %H:%M}"
+            times[message["id"]] = message.get("date", 0)
+            senders[message["id"]] = sender_name(message)
             marker = ">>> " if message["id"] == target["id"] else ""
             out.append(f"{marker}[m{message['id']}] {line}")
             if marker:
@@ -590,11 +634,12 @@ def message_context(
         target_line = f">>> [m{target['id']}] " + (
             summary.message_line(target, sender_name(target), transcript) or "(no text)")
         lines_around.append(target_line)
-        times[target["id"]] = ""
-    parts = [f"Chat: {chat_title}", f"Reader: {reader or 'unknown'}"]
+        times[target["id"]] = target.get("date", 0)
+        senders[target["id"]] = sender_name(target)
+    parts = [summary.today_header(), f"Chat: {chat_title}", f"Reader: {reader or 'unknown'}"]
     if chat_summary:
         parts.append("Earlier summary of this chat (may be outdated):\n"
-                     + re.sub(r"\[([^\]]+)\]\(tgc://[^)]+\)", r"\1", chat_summary)[:3000])
+                     + re.sub(r"\[[^\]]*\]\(tgc://[^)]+\)", "", chat_summary)[:3000])
     if len(lines_chain) > 1:
         parts.append("Reply chain, oldest first:\n" + "\n".join(lines_chain))
     parts.append("Messages around it, oldest first:\n" + "\n".join(lines_around))
@@ -603,18 +648,82 @@ def message_context(
                      + "\n".join(f"- {e}" for e in my_examples))
     parts.append(f"Message to look at: {target_line}")
     count = len(seen | {target["id"]})
-    return MessageContext("\n\n".join(parts), Source(times=times, count=count, truncated=False),
+    return MessageContext("\n\n".join(parts),
+                          Source(times=times, count=count, truncated=False, senders=senders),
                           count, target_line)
 
 
-def explain_prompt(context: MessageContext, language: str) -> list[dict[str, Any]]:
-    return system_user(_lang(EXPLAIN_PROMPT, language), context.text)
+def explain_prompt(context: MessageContext, language: str,
+                   reactions: list[str] | None = None) -> list[dict[str, Any]]:
+    body = context.text
+    if reactions:
+        body += "\n\nAllowed reactions: " + " ".join(reactions)
+    return system_user(_lang(EXPLAIN_PROMPT, language), body)
+
+
+KINDS = ("actionable", "informational", "light")
+_EXPLAIN_HEADER = re.compile(r"^\s*(KIND|REACTIONS|REPLY)\s*:\s*(.*)$", re.IGNORECASE)
+QUICK_REACTIONS = 3
+
+
+@dataclass(frozen=True)
+class Explained:
+    kind: str  # actionable | informational | light | "" (not said yet, or an old answer)
+    reactions: list[str]  # reaction keys, only ones the chat allows
+    reply: str  # a short reply in tone (light messages)
+    text: str  # the markdown sections
+
+
+def parse_explain(text: str, allowed: list[str]) -> Explained:
+    """Splits the KIND / REACTIONS / REPLY lines off an Explain answer (also a half-streamed
+    one: a header line still being written is hidden, not shown as text)."""
+    kind, picked, reply = "", [], ""
+    body: list[str] = []
+    lines = text.split("\n")
+    for index, line in enumerate(lines):
+        header = _EXPLAIN_HEADER.match(line) if not body else None
+        if header:
+            key, value = header.group(1).upper(), header.group(2).strip()
+            if key == "KIND":
+                kind = next((k for k in KINDS if k in value.lower()), "")
+            elif key == "REACTIONS":
+                picked = value.replace(",", " ").split()
+            else:
+                reply = value.strip("\"«»“” ")
+        elif not body and index == len(lines) - 1 and line.strip() and any(
+                k.startswith(line.strip().upper()) for k in ("KIND:", "REACTIONS:", "REPLY:")):
+            continue  # "KIN" while streaming
+        elif body or line.strip():
+            body.append(line)
+    reactions = _allowed_reactions(picked, allowed) if kind == "light" else []
+    return Explained(kind, reactions, reply if kind == "light" else "", "\n".join(body).strip())
+
+
+def _allowed_reactions(picked: list[str], allowed: list[str]) -> list[str]:
+    """The model's picks that the chat allows (❤️ and ❤ are the same reaction); topped up
+    from the chat's own first reactions so there are always 2–3 to click."""
+    by_shape = {key.replace("\ufe0f", ""): key for key in allowed}
+    result: list[str] = []
+    for emoji in picked:
+        key = by_shape.get(emoji.replace("\ufe0f", ""))
+        if key and key not in result:
+            result.append(key)
+    for key in allowed:
+        if len(result) >= 2:
+            break
+        if key not in result:
+            result.append(key)
+    return result[:QUICK_REACTIONS]
 
 
 def reply_options_prompt(context: MessageContext, language: str, modifier: str = "",
                          already: list[str] | None = None, count: int = 3,
-                         ) -> list[dict[str, Any]]:
+                         reads: tuple[str, ...] = ()) -> list[dict[str, Any]]:
+    """`reads`: the languages the reader reads (`language` among them); no translation for
+    replies in those."""
+    known = [LANGUAGES.get(c, c) for c in dict.fromkeys((language, *reads))]
     system = (_lang(REPLY_OPTIONS_PROMPT, language)
+              .replace("{reads}", " or ".join(known))
               .replace("{count}", str(count))
               .replace("{modifier}", MODIFIERS.get(modifier, "")))
     body = context.text
@@ -623,9 +732,11 @@ def reply_options_prompt(context: MessageContext, language: str, modifier: str =
     return system_user(system, body)
 
 
-def parse_reply_options(text: str) -> tuple[str, list[dict[str, str]]]:
-    """(analysis, [{label, text, translation}]) from the REPLY_OPTIONS_PROMPT format;
-    tolerates a half-streamed answer."""
+def parse_reply_options(text: str, reads: tuple[str, ...] = (),
+                        ) -> tuple[str, list[dict[str, str]]]:
+    """(analysis, [{label, text, translation, language}]) from the REPLY_OPTIONS_PROMPT
+    format; tolerates a half-streamed answer. A reply in one of `reads` (the languages the
+    user reads) loses its translation, whatever the model wrote."""
     analysis = ""
     options: list[dict[str, str]] = []
     current: dict[str, Any] | None = None
@@ -634,11 +745,15 @@ def parse_reply_options(text: str) -> tuple[str, list[dict[str, str]]]:
         if line.upper().startswith("ANALYSIS:") and current is None:
             analysis = line.split(":", 1)[1].strip()
         elif line.startswith("###"):
-            current = {"label": line.lstrip("#").strip(), "lines": [], "translation": ""}
+            current = {"label": line.lstrip("#").strip(), "lines": [], "translation": "",
+                       "language": ""}
             options.append(current)  # type: ignore[arg-type]
+        elif current is not None and re.match(r"LANG(UAGE)?\s*:", line, re.IGNORECASE):
+            current["language"] = line.split(":", 1)[1].strip().lower()[:2]
+            current["done"] = True
         elif current is not None and line.upper().startswith("TRANSLATION:"):
             current["translation"] = line.split(":", 1)[1].strip()
-        elif current is not None and not current["translation"]:
+        elif current is not None and not current["translation"] and not current.get("done"):
             current["lines"].append(line)
         elif current is None and analysis and line.strip():
             analysis += " " + line.strip()
@@ -646,8 +761,10 @@ def parse_reply_options(text: str) -> tuple[str, list[dict[str, str]]]:
     for option in options:
         body = "\n".join(option["lines"]).strip()  # type: ignore[index]
         if body:
+            language = option["language"]  # type: ignore[index]
             result.append({"label": option["label"], "text": body,  # type: ignore[index]
-                           "translation": option["translation"]})  # type: ignore[index]
+                           "translation": "" if language in reads  # type: ignore[index]
+                           else option["translation"], "language": language})
     return analysis, result
 
 
@@ -659,6 +776,8 @@ def reply_markdown(text: str) -> str:
             out.append("*" + line.split(":", 1)[1].strip() + "*")
         elif line.upper().startswith("TRANSLATION:"):
             out.append("_" + line.split(":", 1)[1].strip() + "_")
+        elif re.match(r"LANG(UAGE)?\s*:", line, re.IGNORECASE):
+            continue
         else:
             out.append(line)
     return "\n".join(out)

@@ -10,7 +10,7 @@ Item {
     property var highlightId: 0          // message to flash after a jump (search, quote, summary)
     readonly property bool isGroupChat: messages.chatType === "group" || messages.chatType === "supergroup"
 
-    signal openChatRequested(var chatId)
+    signal openChatRequested(var chatId, var messageId)
 
     // Put a draft (saved, or changed on another device) into the composer without saving it back.
     function loadDraft(text, replyTo) {
@@ -79,6 +79,13 @@ Item {
     Connections {
         target: messages
         function onViewerRequested(messageId) { viewer.open(messageId) }
+        // A t.me link to a message: jump to it here, or open the other chat.
+        function onLinkResolved(chatId, messageId) {
+            if (chatId !== messages.chatId)
+                root.openChatRequested(chatId, messageId)
+            else if (messageId)
+                root.showMessage(messageId)
+        }
         function onJumpReady(row) {
             list.stickToBottom = false
             list.anchorId = 0
@@ -261,10 +268,7 @@ Item {
                         personMenu.colorIndex = senderColor
                         personMenu.popup()
                     }
-                    onLinkActivated: link => {
-                        if (!link.startsWith("tg://"))   // TODO: handle tg:// links in-app
-                            Qt.openUrlExternally(link)
-                    }
+                    onLinkActivated: link => messages.openLink(link)
                 }
 
                 onContentYChanged: viewTimer.restart()
@@ -307,6 +311,7 @@ Item {
                 visible: root.summaryOpen
                 onCloseRequested: root.summaryOpen = false
                 onMessageRequested: id => root.showMessage(id)
+                onReactionRequested: (id, key) => messages.addReaction(id, key)
             }
         }
 
@@ -859,7 +864,7 @@ Item {
         id: forwardDialog
         onChatPicked: chatId => {
             messages.forward(forwardDialog.messageId, chatId)
-            root.openChatRequested(chatId)
+            root.openChatRequested(chatId, 0)
         }
     }
 

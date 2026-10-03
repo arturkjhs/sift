@@ -3,7 +3,7 @@
 Qt's own MarkdownText ignores the theme's link color and indents lists by 40px, so summaries are
 converted here: headings, bullet and numbered lists (nested by indentation), paragraphs, simple
 `| a | b |` tables, and inline **bold**, *italic*, `code` and [links](url). Anything else stays plain text.
-Only http(s) and tgc:// links become clickable.
+Only http(s) and tgc:// links become clickable; numbered message links are citation chips.
 """
 
 from __future__ import annotations
@@ -93,16 +93,34 @@ def _block(text: str, palette: Palette, top: int, level: int = 0, glyph: str = "
     return f'<p style="{style}">{body}</p>'
 
 
+_SUPERSCRIPT = str.maketrans("0123456789", "⁰¹²³⁴⁵⁶⁷⁸⁹")
+
+
+def _chip(number: str, url: str, palette: Palette) -> str:
+    """A citation: a raised number like a footnote (`summary.number_links`); the panel shows
+    "Sender, time" on hover. Unicode superscripts: Qt's vertical-align:super is unreadably
+    small."""
+    return (f'<a href="{html.escape(url, quote=True)}" style="text-decoration:none">'
+            f'<span style="color:{palette.link}; font-weight:600">'
+            f'{number.translate(_SUPERSCRIPT)}</span></a>')
+
+
 def _inline(text: str, palette: Palette) -> str:
     out: list[str] = []
     position = 0
+    chip_end = -1  # where the last citation chip ended: the next one right after gets a comma
     for match in _INLINE.finditer(text):
         out.append(html.escape(text[position:match.start()], quote=False))
         position = match.end()
         if (label := match.group("label")) is not None:
             url = match.group("url")
             inner = _inline(label, palette)
-            if url.startswith(_SAFE_SCHEMES):
+            if url.startswith("tgc://message/") and label.isdigit():
+                if match.start() == chip_end:
+                    out.append(f'<span style="color:{palette.link}">\u02D2</span>')
+                out.append(_chip(label, url, palette))
+                chip_end = match.end()
+            elif url.startswith(_SAFE_SCHEMES):
                 out.append(
                     f'<a href="{html.escape(url, quote=True)}" style="text-decoration:none">'
                     f'<span style="color:{palette.link}">{inner}</span></a>')

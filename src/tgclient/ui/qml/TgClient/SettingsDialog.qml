@@ -522,6 +522,30 @@ Popup {
                         }
                     }
                 }
+                Text {
+                    Layout.fillWidth: true
+                    Layout.topMargin: 4
+                    wrapMode: Text.Wrap
+                    text: qsTr("I also read: suggested replies in these languages come "
+                               + "without a translation.")
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSmall
+                }
+                Row {
+                    spacing: 6
+                    Repeater {
+                        objectName: "readLanguages"
+                        model: ai.languages
+                        PillButton {
+                            required property var modelData
+                            readonly property bool own: ai.translateTo === modelData.code
+                            text: modelData.label
+                            filled: ai.readLanguages.indexOf(modelData.code) >= 0
+                            enabled: !own
+                            onClicked: ai.setReads(modelData.code, !filled)
+                        }
+                    }
+                }
             }
 
             RowLayout {
@@ -610,7 +634,8 @@ Popup {
                 text: qsTr("Asking about a chat sends the question and the messages that search "
                            + "found for it plus the latest ones. Dates and meetings sends the "
                            + "last 30 days; Collect answers sends the messages after the question "
-                           + "and the member names. Asking about a file sends the whole file.")
+                           + "and the names of those it was addressed to. Asking about a file "
+                           + "sends the whole file.")
             }
             Bullet {
                 text: qsTr("The digest is made when you press it, from chats you added to it, "

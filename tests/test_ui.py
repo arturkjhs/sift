@@ -127,8 +127,10 @@ def responder(req: dict[str, Any]) -> list[dict[str, Any]]:
                 return [{"@type": "messages", "total_count": 0, "messages": [],
                          "@extra": req["@extra"]}]
             return [{"@type": "messages", "total_count": 5, "@extra": req["@extra"], "messages": [
-                _media(5, {"@type": "messageVoiceNote", "voice_note": {
+                {**_media(5, {"@type": "messageVoiceNote", "voice_note": {
                     "duration": 3, "waveform": "", "mime_type": "audio/ogg", "voice": _file(51)}}),
+                 "reply_to": {"@type": "messageReplyToMessage", "chat_id": 1,
+                              "message_id": 3}},  # to my message: "for you" in the summary
                 _media(4, {"@type": "messageDocument", "document": {
                     "file_name": "a.pdf", "mime_type": "application/pdf", "document": _file(52)}}),
                 _msg(3, "See **you** at https://example.com 🚀", out=True),
@@ -216,7 +218,13 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         def ai_reply(body: dict[str, Any]) -> str:
             system = str(body["messages"][0]["content"])
             if "understand one message" in system:
-                return ("## Суть\nОлена спрашивает про ширину пузыря [m2].\n"
+                target = str(body["messages"][1]["content"]).rsplit(">>> [m", 1)[1][:1]
+                if target == "1":
+                    return ("KIND: light\nREACTIONS: 😂 ❤️ 🦄\nREPLY: Привет-привет 👋\n"
+                            "## Суть\nПросто приветствие [m1].")
+                if target == "3":
+                    return "KIND: informational\n## Суть\nВстреча в офисе, ссылка [m3]."
+                return ("KIND: actionable\n## Суть\nОлена спрашивает про ширину пузыря [m2].\n"
                         "## Чего хотят от тебя\nОтвета, подходит ли такой перенос строк.\n"
                         "## Неясно\nО каком экране речь.")
             if "draft replies" in system:
@@ -237,7 +245,10 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
             if "digest of several" in system:
                 return ("## Olena\n- Meeting at the office, link sent [m1]\n\n"
                         "Nothing important: Book club")
-            return "- Meet at the office [m3]\n- Bubble width discussion [m2, m1]"
+            return ("## For you\n- Olena answers you with a voice message [m5].\n"
+                    "- Olena asks everyone whether the bubble wraps right [m2].\n\n"
+                    "**Office meetup.** Agreed to meet at the office; link sent [m3].\n\n"
+                    "**Bubble width.** Long messages wrap correctly [m2, m1].")
 
         router = FakeRouter(ai_reply, cost=0.0031)
         from tgclient.services.search_index import SearchIndex
@@ -463,6 +474,57 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         await settle(0.1)
         self.assertIn("tgc://message/2", session.ai.summaryText)
         _screenshot(window, "ai-explain")
+        panel = window.findChild(QQuickItem, "summaryPanel")
+
+        def shown(name: str) -> bool:
+            item = find_item(panel, name)
+            return item is not None and item.isVisible()
+
+        self.assertTrue(shown("suggestFromExplain"))  # actionable: full reply options offered
+        self.assertFalse(shown("quickReactions"))
+        session.ai.explainMessage(3, "")
+        await wait_until(lambda: (pump(), session.ai.summaryState)[1] == "done"
+                         and session.ai.explainKind == "informational")
+        await settle(0.1)
+        self.assertFalse(shown("suggestFromExplain"))
+        self.assertFalse(shown("quickReactions"))
+        self.assertFalse(shown("quickReply"))
+        # light: reactions the chat allows and a short reply, no analysis
+        session.ai.explainMessage(1, "Olena")
+        await wait_until(lambda: (pump(), session.ai.summaryState)[1] == "done"
+                         and session.ai.explainKind == "light")
+        await settle(0.1)
+        self.assertTrue(shown("quickReactions"))
+        self.assertTrue(shown("quickReply"))
+        self.assertFalse(shown("suggestFromExplain"))
+        _screenshot(window, "ai-explain-light")
+        chips = [i for i in _all_items(panel) if i.objectName() == "quickReaction"]
+        self.assertEqual([c.property("modelData")["key"] for c in chips],
+                         ["\U0001F602", "\u2764"])  # 🦄 isn't allowed in this chat
+        from PySide6.QtCore import QPoint, Qt
+        from PySide6.QtTest import QTest
+
+        center = chips[1].mapToScene(chips[1].boundingRect().center()).toPoint()
+        QTest.mouseClick(window, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier,
+                         QPoint(center.x(), center.y()))
+        sent = session.client._hub._lib.sent
+        await wait_until(lambda: (pump(), any(r["@type"] == "addMessageReaction"
+                                              for r in sent))[1])
+        reaction = next(r for r in sent if r["@type"] == "addMessageReaction")
+        self.assertEqual((reaction["chat_id"], reaction["message_id"], reaction["reaction_type"],
+                          reaction["is_big"]),
+                         (1, 1, {"@type": "reactionTypeEmoji", "emoji": "\u2764"}, False))
+        self.assertTrue(chips[1].property("sent"))
+        session.ai.insertQuickReply()
+        pump()
+        self.assertEqual(message_view.property("replyToId"), 1)
+        self.assertEqual(find_item(window.contentItem(), "composerInput").property("text"),
+                         "Привет-привет 👋")
+        message_view.setProperty("replyToId", 0)
+        QMetaObject.invokeMethod(find_item(window.contentItem(), "composerInput"), "clear")
+        self.assertEqual(warnings, [], "QML warnings in the explain panel kinds")
+        session.ai.explainMessage(2, "Olena")  # cached: back to the actionable one
+        await wait_until(lambda: (pump(), session.ai.explainKind)[1] == "actionable")
         session.ai.suggestReplies(2, "Olena")
         await wait_until(lambda: (pump(), session.ai.summaryState)[1] == "done")
         await settle(0.1)
@@ -600,6 +662,15 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         await settle()
         self.assertEqual(warnings, [], "QML warnings in settings")
         _screenshot(window, "settings")
+        session.ai.setReads("uk", True)
+        self.assertEqual(session.prefs.get("read_languages"), ["uk"])
+        self.assertIn("uk", session.ai.readLanguages)
+        reads = settings_dialog.findChild(QQuickItem, "readLanguages")
+        flick = settings_dialog.property("contentItem")
+        flick.setProperty("contentY", max(0.0, reads.mapToItem(
+            flick.property("contentItem"), 0, 0).y() - 200))
+        await settle()
+        _screenshot(window, "settings-languages")
         QMetaObject.invokeMethod(settings_dialog, "close")
 
         from tgclient.app import dispose_engine

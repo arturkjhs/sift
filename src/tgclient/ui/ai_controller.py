@@ -20,9 +20,11 @@ from ..prefs import Prefs
 from ..services import assist
 from ..services.ai import AiService, AiUnavailable, SummaryState
 from ..services.openrouter import OpenRouter, OpenRouterError, mask_key
-from ..services.summary import message_id_from_link, parse_message_link
+from ..services.summary import (link_tooltip, message_id_from_link, number_links,
+                                parse_message_link)
 from ..store.chats import ChatStore
 from ..store.markdown import markdown_to_html
+from ..store.reactions import as_items
 from ..store.richtext import Palette
 
 log = logging.getLogger(__name__)
@@ -185,6 +187,17 @@ class AiController(QObject):
     def setTranslateTo(self, lang: str) -> None:
         self._service.set_translate_to(lang)
         self._prefs.set("ai_language", self._service.translate_to)
+
+    @Property("QVariantList", notify=configChanged)
+    def readLanguages(self) -> list[str]:
+        """Every language the user reads, the AI language first."""
+        return list(self._service.reads)
+
+    @Slot(str, bool)
+    def setReads(self, lang: str, on: bool) -> None:
+        codes = [c for c in self._service.read_languages if c != lang] + ([lang] if on else [])
+        self._service.set_read_languages(codes)
+        self._prefs.set("read_languages", list(self._service.read_languages))
 
     @Property(str, notify=configChanged)
     def languageLabel(self) -> str:
@@ -388,6 +401,35 @@ class AiController(QObject):
         return str(self._current().data.get("analysis", "")) if self._subject.startswith(
             "reply:") else ""
 
+    @Property(str, notify=summaryChanged)
+    def explainKind(self) -> str:
+        """actionable | informational | light | "" for the message explained in the panel."""
+        return str(self._current().data.get("kind", "")) if self._subject.startswith(
+            "explain:") else ""
+
+    @Property("QVariantList", notify=summaryChanged)
+    def quickReactions(self) -> list[dict[str, str]]:
+        """Reactions suggested for a light message: [{key, label}], only ones the chat allows."""
+        if self.explainKind != "light":
+            return []
+        return as_items([str(k) for k in self._current().data.get("reactions", [])])
+
+    @Property(str, notify=summaryChanged)
+    def quickReply(self) -> str:
+        return str(self._current().data.get("quickReply", "")) if self.explainKind == (
+            "light") else ""
+
+    @Property("QVariant", notify=summaryChanged)
+    def explainedMessageId(self) -> int:
+        return int(self._subject.split(":", 1)[1]) if self._subject.startswith(
+            "explain:") else 0
+
+    @Slot()
+    def insertQuickReply(self) -> None:
+        """The short reply to a light message into the input, as a reply. Never sends."""
+        if self.quickReply and self.explainedMessageId:
+            self.insertReply.emit(self.quickReply, self.explainedMessageId)
+
     @Slot(int)
     def insertOption(self, index: int) -> None:
         """Put a suggested reply into the input as a reply to its message. Never sends."""
@@ -429,7 +471,7 @@ class AiController(QObject):
 
     @Property(str, notify=globalChanged)
     def globalHtml(self) -> str:
-        return markdown_to_html(self._global_state().text, self._palette)
+        return markdown_to_html(number_links(self._global_state().text), self._palette)
 
     @Property(str, notify=globalChanged)
     def globalError(self) -> str:
@@ -573,7 +615,7 @@ class AiController(QObject):
 
     @Property(str, notify=summaryChanged)
     def summaryHtml(self) -> str:
-        return markdown_to_html(self._current().text, self._palette)
+        return markdown_to_html(number_links(self._current().text), self._palette)
 
     def _get_link(self) -> str:
         return self._palette.link
@@ -623,6 +665,11 @@ class AiController(QObject):
         if summary.state == "done" and summary.cost:
             parts.append(_usd(summary.cost))
         return " · ".join(p for p in parts if p)
+
+    @Slot(str, result=str)
+    def linkTooltip(self, link: str) -> str:
+        """"Sender, 02.10 19:56" for a citation chip; "" for other links."""
+        return link_tooltip(link)
 
     @Slot(str, result="QVariant")
     def messageIdFromLink(self, link: str) -> int:

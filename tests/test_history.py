@@ -52,6 +52,13 @@ class Server:
                 if reply is None:
                     return [error(req, 404, "Not Found")]
                 return [{**reply, "@extra": req["@extra"]}]
+            case "getMessageLinkInfo":
+                if not req["url"].startswith("https://t.me/friends/"):
+                    return [error(req, 400, "Invalid message link")]
+                post = int(req["url"].rsplit("/", 1)[1])
+                return [{"@type": "messageLinkInfo", "is_public": True, "chat_id": CHAT,
+                         "message": msg(post) if post <= self.total else None,
+                         "@extra": req["@extra"]}]
             case "parseMarkdown":
                 return [{**req["text"], "@extra": req["@extra"]}]
             case "sendMessage":
@@ -173,6 +180,29 @@ class JumpTest(HistoryCase):
         await wait_until(lambda: bool(rows))
         self.assertEqual(rows, [model.rowOf(3)])
         self.assertEqual(rows[0], 117)  # ids 120..1, newest first
+
+
+    async def test_telegram_links_to_messages_open_in_the_app(self) -> None:
+        qt_app()
+        from unittest import mock
+
+        from tgclient.models.messages import MessageListModel
+
+        await self.push(new_chat(CHAT, "Friends", 1))
+        model = MessageListModel(self.client, self.chats, self.users)
+        resolved: list[tuple[Any, Any]] = []
+        model.linkResolved.connect(lambda chat, message: resolved.append((chat, message)))
+        model.open(CHAT)
+        with mock.patch("tgclient.models.messages.QDesktopServices") as desktop:
+            model.openLink("https://t.me/friends/7")
+            await wait_until(lambda: bool(resolved))
+            self.assertEqual(resolved, [(CHAT, 7)])
+            model.openLink("https://t.me/other/5")  # TDLib can't resolve it: the browser
+            await wait_until(lambda: desktop.openUrl.called)
+            model.openLink("https://example.com/x")
+            self.assertEqual([c.args[0].toString() for c in desktop.openUrl.call_args_list],
+                             ["https://t.me/other/5", "https://example.com/x"])
+        self.assertEqual(resolved, [(CHAT, 7)])
 
 
 class MessageModelTest(HistoryCase):

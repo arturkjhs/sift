@@ -5,7 +5,9 @@ from __future__ import annotations
 import base64
 import tempfile
 import time
+import re
 import unittest
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -16,6 +18,9 @@ from tgclient.services.ai import AiService
 from tgclient.services.ai_store import AiStore, StoredSummary
 from tgclient.services.openrouter import OpenRouterError
 from tgclient.store.chats import ChatStore
+from tgclient.store.format import message_stamp
+from tgclient.store.markdown import markdown_to_html
+from tgclient.store.richtext import Palette
 from tgclient.store.users import UserStore
 from tgclient.td import TdHub
 
@@ -28,6 +33,10 @@ def msg(mid: int, text: str = "", sender: int = 5, ago: int = 0, **fields: Any) 
     return {"@type": "message", "id": mid, "chat_id": CHAT, "is_outgoing": False,
             "sender_id": {"@type": "messageSenderUser", "user_id": sender}, "date": NOW - ago,
             "content": {"@type": "messageText", "text": {"text": text or f"m{mid}"}}, **fields}
+
+
+def _ts(*parts: int) -> int:
+    return int(datetime(*parts).timestamp())  # noqa: DTZ001 - local time, as the app shows it
 
 
 class OpenRouterTest(unittest.IsolatedAsyncioTestCase):
@@ -77,15 +86,106 @@ class AiStoreTest(unittest.TestCase):
 
 class SummaryHelpersTest(unittest.TestCase):
     def test_linkify_keeps_only_real_ids(self) -> None:
-        source = summary.Source(times={3: "10:02", 5: "10:05"}, count=2, truncated=False)
+        t3, t5 = _ts(2026, 10, 2, 10, 2), _ts(2026, 10, 2, 10, 5)
+        source = summary.Source(times={3: t3, 5: t5}, count=2, truncated=False,
+                                senders={3: "Ann"})
         text = summary.linkify("- plan [m3, m99]\n- made up [m77]\n- both [m3; m5]", source)
-        self.assertIn("[10:02](tgc://message/3)", text)
+        self.assertIn(f"- plan[](tgc://message/3?t={t3}&s=Ann)\n", text)
         self.assertNotIn("99", text)
         self.assertNotIn("m77", text)
         self.assertIn("- made up\n", text)  # trailing space left by the dropped citation is gone
-        self.assertIn("[10:05](tgc://message/5)", text)
-        self.assertEqual(summary.message_id_from_link("tgc://message/5"), 5)
+        self.assertIn(f"[](tgc://message/5?t={t5})", text)  # no sender known: no &s=
+        self.assertEqual(summary.message_id_from_link(f"tgc://message/5?t={t5}&s=Ann"), 5)
+        self.assertEqual(summary.message_id_from_link("tgc://message/5"), 5)  # older summaries
         self.assertEqual(summary.message_id_from_link("https://x"), 0)
+
+    def test_at_most_two_links_per_statement(self) -> None:
+        source = summary.Source(times={i: 1000 + i for i in range(1, 6)}, count=5,
+                                truncated=False)
+        text = summary.linkify("a [m1, m2, m3]. b [m4] [m5], [m1]. c [m9, m5]", source)
+        self.assertEqual(re.findall(r"message/(\d+)", text), ["1", "2", "4", "5", "5"])
+        self.assertIn("a[](tgc://message/1?t=1001)[](tgc://message/2?t=1002). b", text)
+
+    def test_links_are_numbered_in_reading_order(self) -> None:
+        minute = _ts(2026, 10, 2, 15, 52)
+        source = summary.Source(times={1: minute, 2: minute, 3: minute + 60}, count=3,
+                                truncated=False)
+        stored = summary.linkify("- a [m2, m1]\n- b [m3; m2]", source)
+        shown = summary.number_links(stored)
+        self.assertEqual(re.findall(r"\[(\d+)\]\(tgc://message/(\d+)", shown),
+                         [("1", "2"), ("2", "1"), ("3", "3"), ("1", "2")])
+        self.assertEqual(summary.number_links(shown), shown)  # stable when shown again
+        older = f"x [15:52](tgc://message/7?t={minute}) [15:52 #2](tgc://message/8?t={minute})"
+        self.assertEqual(summary.number_links(older),
+                         f"x [1](tgc://message/7?t={minute}) [2](tgc://message/8?t={minute})")
+        self.assertEqual(summary.number_links("[x](tgc://message/7)"), "[x](tgc://message/7)")
+        cross = summary.Source(times={1: minute, 2: minute}, count=2, truncated=False,
+                               targets={1: "7/10", 2: "8/10"})  # same id, other chats
+        self.assertIn("[2](tgc://message/8/10",
+                      summary.number_links(summary.linkify("[m1] [m2]", cross)))
+
+    def test_chips_render_small_and_raised(self) -> None:
+        html = markdown_to_html("fact[1](tgc://message/7?t=5&s=Ann)", Palette(link="#123456"))
+        self.assertIn('href="tgc://message/7?t=5&amp;s=Ann"', html)
+        self.assertIn(">¹</span>", html)
+        self.assertIn(">¹²</span>", markdown_to_html("[12](tgc://message/7?t=5)", Palette()))
+        self.assertIn("color:#123456", html)
+
+    def test_for_you_keeps_only_what_code_marked(self) -> None:
+        text = ("## For you\n- Karel asks you to check the build [m5].\n"
+                "- Results of ZDP, who applied? [m9]\n\n"
+                "**Build.** Broken since Monday [m5, m6].")
+        self.assertEqual(summary.keep_for_you(text, "For you", (5,)),
+                         "## For you\n- Karel asks you to check the build [m5].\n\n"
+                         "**Build.** Broken since Monday [m5, m6].")
+        self.assertEqual(summary.keep_for_you(text, "For you", ()),
+                         "**Build.** Broken since Monday [m5, m6].")
+        self.assertEqual(summary.keep_for_you("## For you:\n- asks all [m9]\n\n**X.** y",
+                                              "For you", (5,)), "**X.** y")
+        self.assertEqual(summary.keep_for_you("**X.** y [m5]", "For you", (5,)), "**X.** y [m5]")
+
+
+class MessageStampTest(unittest.TestCase):
+    """One label for message times everywhere: links in AI text and lines sent to the model."""
+
+    NOW = datetime(2026, 10, 2, 15, 45)
+
+    def test_today_other_day_other_year(self) -> None:
+        self.assertEqual(message_stamp(_ts(2026, 10, 2, 15, 52), self.NOW), "15:52")
+        self.assertEqual(message_stamp(_ts(2026, 10, 1, 15, 52), self.NOW), "01.10 15:52")
+        self.assertEqual(message_stamp(_ts(2026, 1, 9, 8, 5), self.NOW), "09.01 08:05")
+        self.assertEqual(message_stamp(_ts(2025, 10, 1, 15, 52), self.NOW), "01.10.25 15:52")
+
+    def test_midnight(self) -> None:
+        just_after = datetime(2026, 10, 2, 0, 1)
+        self.assertEqual(message_stamp(_ts(2026, 10, 1, 23, 59), just_after), "01.10 23:59")
+        self.assertEqual(message_stamp(_ts(2026, 10, 2, 0, 0), just_after), "00:00")
+        new_year = datetime(2026, 1, 1, 0, 1)
+        self.assertEqual(message_stamp(_ts(2025, 12, 31, 23, 59), new_year), "31.12.25 23:59")
+
+    def test_link_tooltip_is_sender_and_time_as_of_viewing(self) -> None:
+        yesterday = _ts(2026, 10, 1, 15, 52)
+        source = summary.Source(times={7: yesterday}, count=1, truncated=False,
+                                senders={7: "Eugene Ko (work)"})
+        link = re.search(r"\((tgc://[^)]+)\)", summary.linkify("- plan [m7]", source)).group(1)
+        self.assertEqual(summary.link_tooltip(link, self.NOW), "Eugene Ko (work), 01.10 15:52")
+        self.assertEqual(summary.link_tooltip(link, datetime(2026, 10, 1, 20, 0)),
+                         "Eugene Ko (work), 15:52")
+        self.assertEqual(summary.link_tooltip(f"tgc://message/7?t={yesterday}", self.NOW),
+                         "01.10 15:52")  # older summaries: no sender
+        self.assertEqual(summary.link_tooltip("https://x", self.NOW), "")
+
+    def test_model_sees_the_same_format(self) -> None:
+        messages = [msg(1, "old", date=_ts(2025, 12, 30, 9, 0)),
+                    msg(2, "yesterday", date=_ts(2026, 10, 1, 15, 52)),
+                    msg(3, "today", date=_ts(2026, 10, 2, 15, 40))]
+        text, _ = summary.render(messages, lambda m: "Ann", lambda m: None, self.NOW)
+        self.assertEqual(text.splitlines(), ["[m1] 30.12.25 09:00 Ann: old",
+                                             "[m2] 01.10 15:52 Ann: yesterday",
+                                             "[m3] 15:40 Ann: today"])
+        self.assertTrue(summary.today_header(self.NOW).startswith("Today: 02.10.2026, Friday."))
+        prompt = summary.prompt("Team", "Me", text)[1]["content"]
+        self.assertTrue(prompt.startswith("Today: "))
 
     def test_render_includes_transcripts_and_replies(self) -> None:
         voice = {**msg(2), "content": {"@type": "messageVoiceNote", "voice_note": {}}}
@@ -150,7 +250,7 @@ class AiServiceTest(unittest.IsolatedAsyncioTestCase):
         self.client = self.hub.create_client()
         self.chats = ChatStore(self.client)
         self.users = UserStore(self.client)
-        self.router = FakeRouter("- plan [m9, m2]\n- chat [m10]")
+        self.router = FakeRouter("**Plan.** Ship on Friday [m9, m2].\n\n**Chat.** Mostly logistics [m10].")
         self.store = AiStore(":memory:")
         self.ai = AiService(self.client, self.chats, self.users, self.store,
                             self.router.client(), "sum/model", "voice/model")
@@ -211,15 +311,15 @@ class AiServiceTest(unittest.IsolatedAsyncioTestCase):
         result = self.ai.summary(CHAT)
         self.assertEqual(result.state, "done", result.error)
         self.assertEqual(result.count, 3)  # ids 8..10: after last_read_inbox_message_id=7
-        self.assertIn("(tgc://message/9)", result.text)
-        self.assertIn("(tgc://message/10)", result.text)
-        self.assertNotIn("message/2)", result.text)  # cited, but not part of the input
+        self.assertIn("(tgc://message/9?t=", result.text)
+        self.assertIn("(tgc://message/10?t=", result.text)
+        self.assertNotIn("message/2?", result.text)  # cited, but not part of the input
         body = self.router.requests[0]
         self.assertEqual(body["model"], "sum/model")
         user_text = body["messages"][1]["content"]
         self.assertIn("Chat: Team", user_text)
-        self.assertEqual([line.split()[0] for line in user_text.splitlines()[3:]],
-                         ["[m8]", "[m9]", "[m10]"])
+        self.assertEqual([line.split()[0] for line in user_text.splitlines()
+                          if line.startswith("[m")], ["[m8]", "[m9]", "[m10]"])
         await wait_until(lambda: (CHAT, "") in self.store.summaries)
 
     async def test_person_summary_uses_only_their_messages(self) -> None:
@@ -232,13 +332,13 @@ class AiServiceTest(unittest.IsolatedAsyncioTestCase):
         result = self.ai.summary(CHAT, "user:5")
         self.assertEqual(result.state, "done", result.error)
         self.assertEqual((result.scope, result.name, result.count), ("person", "Olena", 5))
-        self.assertIn("(tgc://message/9)", result.text)
-        self.assertNotIn("message/2)", result.text)  # not one of hers
+        self.assertIn("(tgc://message/9?t=", result.text)
+        self.assertNotIn("message/2?", result.text)  # not one of hers
         body = self.router.requests[0]
         self.assertIn("profile", body["messages"][0]["content"])
         user_text = body["messages"][1]["content"]
         self.assertIn("Person: Olena", user_text)
-        ids = [line.split()[0] for line in user_text.splitlines()[4:]]
+        ids = [line.split()[0] for line in user_text.splitlines() if line.startswith("[m")]
         self.assertEqual(ids, ["[m1]", "[m3]", "[m5]", "[m7]", "[m9]"])
         await wait_until(lambda: (CHAT, "user:5") in self.store.summaries)
 

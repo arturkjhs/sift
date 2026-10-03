@@ -253,7 +253,7 @@ SplitView {
             id: messageView
             anchors.fill: parent
             visible: root.selectedChatId !== 0
-            onOpenChatRequested: chatId => root.openChat(chatId, 0)
+            onOpenChatRequested: (chatId, messageId) => root.openChat(chatId, messageId)
         }
 
         Text {

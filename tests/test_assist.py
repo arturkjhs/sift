@@ -8,7 +8,7 @@ import json
 import tempfile
 import time
 import unittest
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -20,6 +20,7 @@ from tgclient.services.ai import AiService, AiUnavailable
 from tgclient.services.ai_store import AiStore, StoredSummary
 from tgclient.services.search import Hit
 from tgclient.store.chats import ChatStore
+from tgclient.store.format import message_stamp
 from tgclient.store.markdown import markdown_to_html
 from tgclient.store.richtext import Palette
 from tgclient.store.users import UserStore
@@ -28,6 +29,7 @@ from tgclient.td import TdHub
 CHAT = 42
 GROUP = 50
 OTHER = 60
+TEAM = 70
 SECRET = 43
 ME = 1
 NOW = int(time.time())
@@ -41,8 +43,14 @@ def msg(mid: int, text: str, sender: int = 5, chat: int = CHAT, ago: int = 0,
             **fields}
 
 
-def reply(message_id: int) -> dict[str, Any]:
-    return {"@type": "messageReplyToMessage", "chat_id": CHAT, "message_id": message_id}
+def reply(message_id: int, chat: int = CHAT) -> dict[str, Any]:
+    return {"@type": "messageReplyToMessage", "chat_id": chat, "message_id": message_id}
+
+
+def mention_text(text: str, offset: int, length: int) -> dict[str, Any]:
+    """offset and length in UTF-16 code units, as TDLib sends them."""
+    return {"@type": "messageText", "text": {"text": text, "entities": [
+        {"offset": offset, "length": length, "type": {"@type": "textEntityTypeMention"}}]}}
 
 
 class Server:
@@ -50,16 +58,31 @@ class Server:
 
     def __init__(self, doc_path: str) -> None:
         self.doc_path = doc_path
+        self.asked_messages: list[list[int]] = []
+        self.members_total = 5
         self.history: dict[int, list[dict[str, Any]]] = {
             CHAT: [msg(5, "ok see you then", 5, ago=60, reply_to=reply(4)),
                    msg(4, "Friday 18:00 at Lucerna?", ME, ago=120, reply_to=reply(3)),
                    msg(3, "let's meet on friday", 5, ago=180),
                    msg(2, "the contract is in the drive", 6, ago=240), msg(1, "hi", 5, ago=300)],
-            GROUP: [msg(24, "no, I'm away", 7, GROUP, ago=10), msg(23, "yes!", 6, GROUP, ago=20),
+            GROUP: [msg(25, "Thanks for the question! Rate us", 9, GROUP, ago=5),
+                    msg(24, "no, I'm away", 7, GROUP, ago=10), msg(23, "yes!", 6, GROUP, ago=20),
                     msg(22, "unrelated meme", 6, GROUP, ago=30),
                     msg(21, "who comes on Saturday?", 5, GROUP, ago=40)],
             OTHER: [msg(31, "I'll send the invoice tomorrow", ME, OTHER, ago=50),
                     msg(30, "can you send the invoice?", 8, OTHER, ago=100)],
+            TEAM: [  # unread from 72 on; 71 (mine) is older and only replied to
+                msg(76, "@karel no", 7, TEAM, ago=10, content=mention_text("@karel no", 0, 6)),
+                msg(75, "👋 @Me_User can you check?", 8, TEAM, ago=20,
+                    content=mention_text("👋 @Me_User can you check?", 3, 8)),
+                msg(74, "agreed", 6, TEAM, ago=30, reply_to=reply(71, TEAM)),
+                msg(73, "Me, thoughts?", 7, TEAM, ago=40, content={
+                    "@type": "messageText", "text": {"text": "Me, thoughts?", "entities": [
+                        {"offset": 0, "length": 2, "type": {
+                            "@type": "textEntityTypeMentionName", "user_id": ME}}]}}),
+                msg(72, "sounds good", ME, TEAM, ago=50),
+                msg(71, "let's ship on Monday", ME, TEAM, ago=90_000),
+            ],
         }
         self.doc = {"@type": "messageDocument", "document": {
             "file_name": "terms.pdf", "mime_type": "application/pdf", "document": {
@@ -90,6 +113,20 @@ class Server:
                         if m["id"] == req["message_id"] and m["chat_id"] == req["chat_id"]:
                             return [{**m, "@extra": extra}]
                 return [error(req, 404, "Not Found")]
+            case "getMessageAvailableReactions":
+                return [{"@type": "availableReactions", "@extra": extra, "top_reactions": [
+                    {"type": {"@type": "reactionTypeEmoji", "emoji": e}}
+                    for e in ("\U0001F44D", "\u2764", "\U0001F602")],
+                    "recent_reactions": [], "popular_reactions": [
+                    {"type": {"@type": "reactionTypeEmoji", "emoji": "\U0001F525"}},
+                    {"type": {"@type": "reactionTypeEmoji", "emoji": "\U0001F4A9"},
+                     "needs_premium": True}]}]
+            case "getMessages":
+                self.asked_messages.append(req["message_ids"])
+                found = [m for m in self.history.get(req["chat_id"], [])
+                         if m["id"] in req["message_ids"]]
+                return [{"@type": "messages", "total_count": len(found), "messages": found,
+                         "@extra": extra}]
             case "getRepliedMessage":
                 for history in self.history.values():
                     for m in history:
@@ -107,9 +144,13 @@ class Server:
                 return [{"@type": "foundChatMessages", "total_count": len(mine),
                          "messages": mine, "next_from_message_id": 0, "@extra": extra}]
             case "searchChatMembers":
-                return [{"@type": "chatMembers", "total_count": 4, "@extra": extra, "members": [
-                    {"member_id": {"@type": "messageSenderUser", "user_id": u}}
-                    for u in (5, 6, 7, 8)]}]
+                return [{"@type": "chatMembers", "total_count": self.members_total,
+                         "@extra": extra, "members": [
+                             {"member_id": {"@type": "messageSenderUser", "user_id": u}}
+                             for u in (5, 6, 7, 8, 9)][:req["limit"]]}]
+            case "searchPublicChat" if req["username"] == "petr":
+                return [{"@type": "chat", "id": 6, "@extra": extra,
+                         "type": {"@type": "chatTypePrivate", "user_id": 6}}]
             case "downloadFile":
                 return [{**self.doc["document"]["document"], "@extra": extra}]
         return [ok(req)]
@@ -142,7 +183,8 @@ class HelpersTest(unittest.TestCase):
         self.assertIn("[m2] (me)", text)
         self.assertIn("## Family\n[m3]", text)
         linked = summary.linkify("- dinner [m3]", source)
-        self.assertIn("(tgc://message/8/10)", linked)
+        self.assertIn("(tgc://message/8/10?t=", linked)
+        self.assertEqual(summary.parse_message_link("tgc://message/8/10?t=5"), (8, 10))
         self.assertEqual(summary.parse_message_link("tgc://message/8/10"), (8, 10))
         self.assertEqual(summary.parse_message_link("tgc://message/10"), (0, 10))
         self.assertEqual(summary.parse_message_link("https://x"), (0, 0))
@@ -283,7 +325,11 @@ class AssistCase(unittest.IsolatedAsyncioTestCase):
             new_chat(CHAT, "Olena", 10), new_chat(GROUP, "Hiking", 20, "chatTypeSupergroup"),
             new_chat(OTHER, "Accounting", 30), new_chat(SECRET, "Secret", 40, "chatTypeSecret"),
             *({"@type": "updateUser", "user": {"id": u, "first_name": name, "last_name": ""}}
-              for u, name in ((ME, "Me"), (5, "Olena"), (6, "Petr"), (7, "Jana"), (8, "Karel"))),
+              for u, name in ((ME, "Me"), (5, "Olena"), (6, "Petr"), (8, "Karel"))),
+            {"@type": "updateUser", "user": {"id": 7, "first_name": "Jana", "last_name": "",
+                                             "usernames": {"active_usernames": ["jana"]}}},
+            {"@type": "updateUser", "user": {"id": 9, "first_name": "Robot", "last_name": "",
+                                             "type": {"@type": "userTypeBot"}}},
             {"@type": "updateOption", "name": "my_id",
              "value": {"@type": "optionValueInteger", "value": str(ME)}},
         )
@@ -360,7 +406,7 @@ class AssistServiceTest(AssistCase):
             self.assertIn("## " + assist.word(code, "who"), prompts[4])
         uk = assist.explain_prompt(context, "uk")[0]["content"]
         self.assertNotIn("## Unclear", uk)
-        self.assertIn("| Хто | Відповідь | Джерело |",
+        self.assertIn("| Хто | Позиція | Відповідь |",
                       assist.answers_prompt("c", "q", "l", [], "uk")[0]["content"])
         self.assertEqual(assist.events_markdown([], "uk"), "Домовлених дат і зустрічей не знайдено.")
 
@@ -413,18 +459,45 @@ class AssistServiceTest(AssistCase):
 
     async def test_collect_answers_sends_replies_and_roster(self) -> None:
         self.replies["how each participant answered"] = (
-            "Who comes?\n| Person | Answer | Source |\n|---|---|---|\n| Petr | Yes | [m23] |\n"
-            "**No answer:** Karel")
+            "Who comes?\n| Person | Position | Answer |\n|---|---|---|\n"
+            "| Petr | Yes | yes! [m23] |\n**No answer:** Karel")
         self.ai.collect_answers(GROUP, 21, "who comes on Saturday?")
         result = await self.done(GROUP, "answers:21")
         self.assertEqual(result.state, "done", result.error)
-        sent = self.router.requests[0]["messages"][1]["content"]
+        system, sent = (m["content"] for m in self.router.requests[0]["messages"])
+        self.assertIn("| Person | Position | Answer |", system)
         self.assertIn("Question: ", sent)
         self.assertIn("who comes on Saturday?", sent)
         self.assertIn("[m23]", sent)
         self.assertNotIn("[m21]", sent)  # the question itself isn't an answer
-        self.assertIn("Members: Petr, Jana, Karel", sent)  # without the asker
+        self.assertIn("Addressed to: Petr, Jana, Karel", sent)  # a small group, without the asker
+        self.assertNotIn("Robot", sent)
+        self.assertNotIn("[m25]", sent)  # a bot's message is no answer
         self.assertIn("tgc://message/23", result.text)
+        self.assertIn("**No answer:** Karel", result.text)
+
+    async def test_answers_in_a_big_group_list_no_one_without_answer(self) -> None:
+        self.server.members_total = 482
+        self.replies["how each participant answered"] = (
+            "Who comes?\n| Person | Position | Answer |\n|---|---|---|\n"
+            "| Petr | Yes | yes! [m23] |\n\n**No answer:** Karel, Jana")
+        self.ai.collect_answers(GROUP, 21, "who comes on Saturday?")
+        result = await self.done(GROUP, "answers:21")
+        system, sent = (m["content"] for m in self.router.requests[0]["messages"])
+        self.assertNotIn("Addressed to", sent)
+        self.assertIn("Do not list who didn't answer", system)
+        self.assertNotIn("No answer", result.text)  # dropped even if the model wrote it
+
+    async def test_answers_to_mentioned_people_only(self) -> None:
+        self.server.members_total = 482
+        question = self.server.history[GROUP][-1]
+        question["content"] = mention_text("@petr @jana who comes on Saturday?", 6, 5)
+        question["content"]["text"]["entities"].append(
+            {"offset": 0, "length": 5, "type": {"@type": "textEntityTypeMention"}})
+        self.ai.collect_answers(GROUP, 21, "who comes?")
+        await self.done(GROUP, "answers:21")
+        sent = self.router.requests[0]["messages"][1]["content"]
+        self.assertIn("Addressed to: Jana, Petr", sent)  # by @username, Petr via TDLib
 
     async def test_document_question_sends_the_pdf_natively(self) -> None:
         self.ai.ask_document(CHAT, 99, "what is the notice period?", "terms.pdf")
@@ -526,8 +599,9 @@ class AssistServiceTest(AssistCase):
         self.assertEqual(result.data["analysis"], "Ждёт подтверждения встречи")
         self.assertEqual(result.data["options"], [
             {"label": "Согласиться", "text": "Jasně, v pátek v 18:00!",
-             "translation": "Да, в пятницу в 18:00!"},
-            {"label": "Уточнить", "text": "Kde přesně?", "translation": "Где именно?"}])
+             "translation": "Да, в пятницу в 18:00!", "language": ""},
+            {"label": "Уточнить", "text": "Kde přesně?", "translation": "Где именно?",
+             "language": ""}])
         request = self.router.requests[0]
         self.assertEqual(request["model"], "m/main")
         self.assertIn("How the reader writes in this chat:\n- Friday 18:00 at Lucerna?",
@@ -537,6 +611,114 @@ class AssistServiceTest(AssistCase):
         await self.done(CHAT, "reply:5")
         self.assertIn("Already suggested:\n- Согласиться\n- Уточнить",
                       self.router.requests[1]["messages"][1]["content"])
+
+    async def test_no_translation_for_replies_in_languages_i_read(self) -> None:
+        self.ai.set_translate_to("ru")
+        self.ai.set_read_languages(["uk"])
+        self.replies["draft replies"] = (
+            "ANALYSIS: Питают про результати\n"
+            "### Відповісти\nЯ ще чекаю\nLANG: uk\nTRANSLATION: Я ещё жду\n"
+            "### Česky\nJeště čekám\nLANG: cs\nTRANSLATION: Я ещё жду")
+        self.ai.suggest_replies(CHAT, 5, "Olena")
+        result = await self.done(CHAT, "reply:5")
+        self.assertEqual([(o["text"], o["translation"]) for o in result.data["options"]],
+                         [("Я ще чекаю", ""), ("Ještě čekám", "Я ещё жду")])
+        system = self.router.requests[0]["messages"][0]["content"]
+        self.assertIn("omit this line if the reply is in\nRussian or Ukrainian", system)
+        self.assertNotIn("LANG", assist.reply_markdown(self.replies["draft replies"]))
+
+    async def test_summary_input_marks_what_concerns_me(self) -> None:
+        await self.push(
+            new_chat(TEAM, "Team", 50, "chatTypeSupergroup", last_read_inbox_message_id=71),
+            {"@type": "updateUser", "user": {"id": ME, "first_name": "Me", "last_name": "",
+                                             "usernames": {"active_usernames": ["me_user"]}}})
+        self.ai.set_enabled(TEAM, True)
+        self.ai.summarize(TEAM, "unread")
+        result = await self.done(TEAM, "")
+        self.assertEqual(result.state, "done", result.error)
+        user = self.router.requests[0]["messages"][1]["content"]
+        lines = {line.split()[0]: line for line in user.splitlines() if line.startswith("[m")}
+        self.assertEqual(sorted(lines), ["[m72]", "[m73]", "[m74]", "[m75]", "[m76]"])
+        self.assertRegex(lines["[m72]"], r"^\[m72\] \(you\) \d\d:\d\d Me: sounds good$")
+        self.assertIn("[m73] @you ", lines["[m73]"])  # a name link to me
+        # replies to my message from before the slice: TDLib is asked who wrote it
+        self.assertIn("[m74] ↩you ", lines["[m74]"])
+        self.assertEqual(self.server.asked_messages, [[71]])
+        self.assertIn("[m75] @you ", lines["[m75]"])  # @username after an emoji (UTF-16)
+        self.assertNotIn("you", lines["[m76]"].split(":")[0])  # someone else mentioned
+        self.assertIn("Reader: Me (@me_user)", user)
+        self.assertIn("Period: unread messages", user)
+        self.assertIn("For the reader: m73, m74, m75\n", user)
+
+    def test_summary_prompt_asks_for_conclusions(self) -> None:
+        system = summary.prompt("Team", "Me", "[m1] 10:00 Ann: hi", "uk")[0]["content"]
+        for rule in ("## Стосується тебе", "leave out this section", "at most 7 topics",
+                     "not in chat order", "`**<short title>.**` followed by 1–3 sentences",
+                     "Lead with the", "Never retell who said what",
+                     "opinions split: A vs B", "Skip noise", "no introduction",
+                     "120–250 words", "(you)", "↩you", "@you", "in Ukrainian"):
+            self.assertIn(rule, system)
+        self.assertNotIn("{H:", system)
+        self.assertIn("## Касается тебя", summary.prompt("T", "Me", "", "ru")[0]["content"])
+
+    async def test_summary_sections_render(self) -> None:
+        self.replies["conclusions, not a retelling"] = (
+            "## For you\n- Karel asks you to check the build [m5].\n"
+            "- Anyone has the contract? [m2]\n\n"
+            "**Friday meetup.** Agreed: Friday 18:00 at Lucerna [m4, m5].\n\n"
+            "**Contract.** It is in the shared drive [m2].")
+        self.ai.summarize(CHAT, "day")
+        result = await self.done(CHAT, "")
+        self.assertIn("For the reader: m5\n", self.router.requests[0]["messages"][1]["content"])
+        self.assertNotIn("Anyone has the contract", result.text)  # m2 isn't for me
+        html = markdown_to_html(summary.number_links(result.text), Palette())
+        self.assertTrue(html.startswith('<p style="margin-top:10px; margin-bottom:0px">'
+                                        "<b>For you</b></p>"))
+        self.assertIn("•&nbsp;&nbsp;Karel asks you to check the build", html)
+        self.assertIn("<b>Friday meetup.</b> Agreed: Friday 18:00 at Lucerna", html)
+        self.assertIn('href="tgc://message/4?t=', html)
+        self.assertEqual(html.count("<p "), 4)  # heading, bullet, two topic paragraphs
+
+    def test_explain_kind_is_parsed(self) -> None:
+        allowed = ["\U0001F44D", "\u2764", "\U0001F602", "\U0001F525"]
+        light = assist.parse_explain(
+            "KIND: light\nREACTIONS: 😂 ❤️ 🦄\nREPLY: \"Classic 😅\"\n## Gist\nA joke [m4].",
+            allowed)
+        self.assertEqual(light, assist.Explained(
+            "light", ["\U0001F602", "\u2764"], "Classic 😅", "## Gist\nA joke [m4]."))
+        topped = assist.parse_explain("KIND: Light\nREACTIONS: 🦄\n## Gist\nhaha", allowed)
+        self.assertEqual(topped.reactions, ["\U0001F44D", "\u2764"])  # never fewer than 2
+        many = assist.parse_explain("KIND: light\nREACTIONS: 👍, 🔥, 😂, ❤", allowed)
+        self.assertEqual(len(many.reactions), 3)
+        act = assist.parse_explain("KIND: actionable\nREACTIONS: 😂\nREPLY: ok\n## Gist\nx",
+                                   allowed)
+        self.assertEqual((act.kind, act.reactions, act.reply, act.text),
+                         ("actionable", [], "", "## Gist\nx"))
+        self.assertEqual(assist.parse_explain("KIND: informational\n## Gist\nx", allowed).kind,
+                         "informational")
+        old = assist.parse_explain("## Gist\nKIND: light is a word here", allowed)
+        self.assertEqual((old.kind, old.text), ("", "## Gist\nKIND: light is a word here"))
+        for partial in ("KIN", "KIND: light\nREACT", "KIND: light\nREACTIONS: 😂\nREP"):
+            self.assertEqual(assist.parse_explain(partial, allowed).text, "", partial)
+
+    async def test_light_message_gets_reactions_and_a_short_reply(self) -> None:
+        self.replies["understand one message"] = (
+            "KIND: light\nREACTIONS: 👍 ❤️\nREPLY: Super, do pátku!\n"
+            "## Gist\nOlena agrees [m5].")
+        self.ai.explain_message(CHAT, 5, "Olena")
+        result = await self.done(CHAT, "explain:5")
+        self.assertEqual(result.state, "done", result.error)
+        self.assertEqual(result.data, {"messageId": 5, "kind": "light",
+                                       "reactions": ["\U0001F44D", "\u2764"],
+                                       "quickReply": "Super, do pátku!"})
+        self.assertNotIn("KIND", result.text)
+        self.assertNotIn("REPLY", result.text)
+        request = self.router.requests[0]
+        self.assertIn("KIND: actionable | informational | light", request["messages"][0]["content"])
+        # what the chat allows (not Premium-only ones), asked from TDLib
+        self.assertIn("Allowed reactions: \U0001F44D \u2764 \U0001F602 \U0001F525",
+                      request["messages"][1]["content"])
+        self.assertNotIn("\U0001F4A9", request["messages"][1]["content"])
 
     def test_parse_half_streamed_options(self) -> None:
         analysis, options = assist.parse_reply_options(
@@ -657,6 +839,51 @@ class ControllerTest(AssistCase):
         await self.done(CHAT, "doc:99")
         self.assertEqual(self.controller.summaryQuestion, "what is the notice period?")
         self.assertEqual(self.controller.parseLink("tgc://message/60/31"), [60, 31])
+        self.assertEqual(self.controller.parseLink("tgc://message/60/31?t=5"), [60, 31])
+
+    async def test_panel_for_each_kind_of_message(self) -> None:
+        inserted: list[tuple[str, Any]] = []
+        self.controller.insertReply.connect(lambda text, mid: inserted.append((text, mid)))
+        answers = {
+            3: "KIND: actionable\n## Gist\nOlena proposes Friday [m3].\n"
+               "## What they want from you\nA yes or no.",
+            2: "KIND: informational\n## Gist\nThe contract is in the drive [m2].",
+            5: "KIND: light\nREACTIONS: 😂 👍\nREPLY: Haha, deal\n## Gist\nA joke.",
+        }
+        seen = {}
+        for message_id, answer in answers.items():
+            self.replies["understand one message"] = answer
+            self.controller.explainMessage(message_id, "Olena")
+            await self.done(CHAT, f"explain:{message_id}")
+            seen[message_id] = (self.controller.explainKind,
+                                [r["key"] for r in self.controller.quickReactions],
+                                self.controller.quickReply, self.controller.explainedMessageId)
+        self.assertEqual(seen[3], ("actionable", [], "", 3))
+        self.assertEqual(seen[2], ("informational", [], "", 2))
+        self.assertEqual(seen[5], ("light", ["\U0001F602", "\U0001F44D"], "Haha, deal", 5))
+        self.assertNotIn("KIND", self.controller.summaryHtml)
+        self.controller.insertQuickReply()
+        self.assertEqual(inserted, [("Haha, deal", 5)])  # into the input, as a reply
+        self.assertFalse(any(r["@type"] == "sendMessage" for r in self.lib.sent))
+        self.controller.showChatSummary()
+        self.assertEqual((self.controller.explainKind, self.controller.quickReactions), ("", []))
+
+    async def test_explain_links_are_numbered_with_sender_and_time_on_hover(self) -> None:
+        self.replies["understand one message"] = "## Gist\nThe plan [m4], the place [m3]."
+        self.controller.explainMessage(5, "Olena")
+        result = await self.done(CHAT, "explain:5")
+        self.assertIn(f"[](tgc://message/4?t={NOW - 120}&s=Me)", result.text)
+        html = self.controller.summaryHtml
+        self.assertIn(">¹</span>", html)
+        self.assertIn(">²</span>", html)
+        link = f"tgc://message/4?t={NOW - 120}&s=Me"
+        self.assertEqual(self.controller.linkTooltip(link), f"Me, {message_stamp(NOW - 120)}")
+        tomorrow = datetime.fromtimestamp(NOW) + timedelta(days=1)  # noqa: DTZ006
+        with mock.patch("tgclient.services.summary.datetime") as clock:
+            clock.now.return_value = tomorrow
+            tooltip = self.controller.linkTooltip(link)
+        self.assertEqual(tooltip, f"Me, {message_stamp(NOW - 120, tomorrow)}")
+        self.assertIn(".", tooltip)  # yesterday's: with the date
 
 
 if __name__ == "__main__":

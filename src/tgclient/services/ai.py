@@ -31,7 +31,8 @@ from typing import Any, Literal
 
 from ..store.chats import ChatStore
 from ..store.files import USER_PRIORITY
-from ..store.format import message_body
+from ..store.format import message_body, message_stamp
+from ..store.reactions import DEFAULT_REACTIONS, available_keys
 from ..store.users import UserStore
 from ..td.client import TdClient, TdError
 from . import assist
@@ -58,11 +59,13 @@ DIGEST_MAX_DAYS = 7
 DIGEST_CHAT_MESSAGES = 300
 PROMISE_DAYS = 14
 ANSWER_WINDOW_SECONDS = 3 * 86400
-MAX_ROSTER = 200
+SMALL_GROUP = 30  # members: up to this, everyone counts as asked
 CONTEXT_AROUND = 20  # messages before and after the one explained / replied to
 CHAIN_DEPTH = 6  # replied-to messages followed up the chain
 STYLE_EXAMPLES = 15  # the user's own messages showing how they write in the chat
 CONTEXT_TTL = 120.0  # seconds the collected context is reused (menu count -> request)
+MAX_ALLOWED_REACTIONS = 30  # offered to the model for a light message
+_PERIODS = {"unread": "unread messages", "day": "last 24 hours", "week": "last 7 days"}
 
 
 @dataclass
@@ -122,6 +125,7 @@ class AiService:
         cheap_model: str = "",
         monthly_limit: float = 1.0,
         translate_to: str = "en",
+        read_languages: tuple[str, ...] = (),
     ) -> None:
         self._client = client
         self._chats = chats
@@ -135,6 +139,7 @@ class AiService:
         self.cheap_model = cheap_model or summary_model  # translation, classification
         self.monthly_limit = monthly_limit  # USD per chat and month; 0 = no limit
         self.translate_to = translate_to
+        self.read_languages = tuple(c for c in read_languages if c in assist.LANGUAGES)
         self.searcher: Searcher | None = None  # SearchService.search, set by the app
         self._transcripts: dict[tuple[int, int], Transcript] = {
             key: Transcript("done", text) for key, text in store.transcripts.items()
@@ -179,6 +184,19 @@ class AiService:
         if lang in assist.LANGUAGES and lang != self.translate_to:
             self.translate_to = lang
             self._emit("config", None)
+
+    def set_read_languages(self, codes: list[str]) -> None:
+        """Languages the user reads besides `translate_to`: replies in them aren't translated."""
+        codes_ = tuple(c for c in dict.fromkeys(codes) if c in assist.LANGUAGES)
+        if codes_ != self.read_languages:
+            self.read_languages = codes_
+            self._emit("config", None)
+
+    @property
+    def reads(self) -> tuple[str, ...]:
+        """Every language the user reads, theirs first."""
+        return (self.translate_to,
+                *(c for c in self.read_languages if c != self.translate_to))
 
     async def _close_later(self, router: OpenRouter) -> None:
         await asyncio.sleep(300)  # let in-flight summaries finish
@@ -535,14 +553,19 @@ class AiService:
         chat = self._chats.chats[chat_id]
         outside = summaries.stop_condition(scope, chat.last_read_inbox_message_id)
         messages, truncated = await summaries.collect(self._client, chat_id, outside)
-        text, source = self._render(chat_id, messages)
+        text, source = summaries.render(messages, self._sender_name, self._transcript_of(chat_id),
+                                        reader=await self._marks_for(chat_id, messages))
         if not source.count:
             raise AiUnavailable("No unread messages" if scope == "unread"
                                 else "Nothing to summarize")
         self._check(chat_id)
-        reply = await self._complete(chat_id, "summary", self.summary_model,
-                                     summaries.prompt(chat.title, self._reader(), text, self.translate_to))
-        return _Result(summaries.linkify(reply.text, source), reply.cost, source.count,
+        reply = await self._complete(
+            chat_id, "summary", self.summary_model,
+            summaries.prompt(chat.title, self._reader(with_username=True), text,
+                             self.translate_to, _PERIODS[scope], source.for_you))
+        text = summaries.keep_for_you(reply.text, assist.word(self.translate_to, "for_you"),
+                                      source.for_you)
+        return _Result(summaries.linkify(text, source), reply.cost, source.count,
                        truncated or source.truncated)
 
     async def _run_person(self, chat_id: int, sender: str, name: str) -> _Result:
@@ -575,13 +598,14 @@ class AiService:
                                         "sender": self._sender_name(message), "text": text}
         if not found:
             raise AiUnavailable("Nothing in this chat to answer from")
-        lines, times = [], {}
+        lines, times, senders = [], {}, {}
         for item in sorted(found.values(), key=lambda m: m["id"]):
-            stamp = datetime.fromtimestamp(item["date"])  # noqa: DTZ006
             text = " ".join(str(item["text"]).split())
-            lines.append(f"[m{item['id']}] {stamp:%Y-%m-%d %H:%M} {item['sender']}: {text}")
-            times[item["id"]] = f"{stamp:%H:%M}"
-        source = summaries.Source(times=times, count=len(lines), truncated=False)
+            lines.append(f"[m{item['id']}] {message_stamp(item['date'])} {item['sender']}: {text}")
+            times[item["id"]] = item["date"]
+            senders[item["id"]] = item["sender"]
+        source = summaries.Source(times=times, count=len(lines), truncated=False,
+                                  senders=senders)
         self._check(chat_id)
         reply = await self._complete(
             chat_id, "ask", self.summary_model,
@@ -609,18 +633,21 @@ class AiService:
         chat = self._chats.chats[chat_id]
         question = await self._client.send(
             {"@type": "getMessage", "chat_id": chat_id, "message_id": message_id})
-        after = await self._messages_after(chat_id, question)
+        after = [m for m in await self._messages_after(chat_id, question)
+                 if not self._is_bot(m.get("sender_id") or {})]  # bots never answer
         question_line = summaries.message_line(question, self._sender_name(question),
                                                self._transcript_of(chat_id))
         text, source = self._render(chat_id, after)
         if not source.count:
             raise AiUnavailable("No messages after this one yet")
-        members = await self._roster(chat_id, question)
+        addressees = await self._addressees(chat_id, question)
         self._check(chat_id)
         reply = await self._complete(chat_id, "answers", self.summary_model,
                                      assist.answers_prompt(chat.title, question_line, text,
-                                                           members, self.translate_to))
-        return _Result(summaries.linkify(reply.text, source), reply.cost, source.count)
+                                                           addressees, self.translate_to))
+        answer = reply.text if addressees else assist.drop_no_answer(reply.text,
+                                                                     self.translate_to)
+        return _Result(summaries.linkify(answer, source), reply.cost, source.count)
 
     async def _messages_after(self, chat_id: int, question: dict[str, Any]) -> list[Any]:
         """Messages newer than `question`, oldest first, up to a few days or pages."""
@@ -640,23 +667,48 @@ class AiService:
             from_id = max(m["id"] for m in newer)
         return [found[k] for k in sorted(found)]
 
-    async def _roster(self, chat_id: int, question: dict[str, Any]) -> list[str]:
-        try:
-            result = await self._client.send({
-                "@type": "searchChatMembers", "chat_id": chat_id, "query": "",
-                "limit": MAX_ROSTER, "filter": None})
-        except TdError:
-            return []
-        if result.get("total_count", 0) > MAX_ROSTER:
-            return []  # too big a group to list who didn't answer
+    async def _addressees(self, chat_id: int, question: dict[str, Any]) -> list[str]:
+        """Who the question was for, by name: the people it mentions, else every member of a
+        small group. Never bots or the asker. Empty when unknown: in a big group almost
+        everyone is "without an answer", which says nothing."""
         asker = (question.get("sender_id") or {}).get("user_id")
+        mentioned_ids, usernames = summaries.mentioned(question)
+        ids = list(mentioned_ids)
+        for username in sorted(usernames):
+            user_id = next((u.id for u in self._users.users.values()
+                            if username in {n.lower() for n in u.usernames}), 0)
+            if not user_id:
+                try:
+                    chat = await self._client.send({"@type": "searchPublicChat",
+                                                    "username": username})
+                    user_id = (chat.get("type") or {}).get("user_id") or 0
+                except TdError:
+                    pass
+            if user_id:
+                ids.append(user_id)
+        if not ids:
+            try:
+                result = await self._client.send({
+                    "@type": "searchChatMembers", "chat_id": chat_id, "query": "",
+                    "limit": SMALL_GROUP + 1, "filter": None})
+            except TdError:
+                return []
+            members = result.get("members") or []
+            if result.get("total_count", len(members)) > SMALL_GROUP:
+                return []
+            ids = [(m.get("member_id") or {}).get("user_id") or 0 for m in members]
         names = []
-        for member in result.get("members") or []:
-            user_id = (member.get("member_id") or {}).get("user_id")
-            user = self._users.users.get(user_id or 0)
-            if user is not None and user_id != asker and user.full_name:
+        for user_id in dict.fromkeys(ids):
+            if user_id in (0, asker):
+                continue
+            user = self._users.users.get(user_id)
+            if user is not None and not user.is_bot and user.full_name:
                 names.append(user.full_name)
         return names
+
+    def _is_bot(self, sender: dict[str, Any]) -> bool:
+        user = self._users.users.get(sender.get("user_id") or 0)
+        return sender.get("@type") == "messageSenderUser" and user is not None and user.is_bot
 
     async def _run_document(self, chat_id: int, message_id: int, question: str) -> _Result:
         message = await self._client.send(
@@ -850,20 +902,43 @@ class AiService:
                 f"{parts.target.get('edit_date', 0)}:{action}:{self.translate_to}:{model}:{extra}")
 
     async def _run_explain(self, chat_id: int, message_id: int, name: str) -> _Result:
+        """Explains the message; a light one (a joke, emoji, agreement) gets reactions the
+        chat allows and one short reply in tone instead of an analysis."""
         key = (chat_id, f"explain:{message_id}")
         parts = await self._context_parts(chat_id, message_id)
         context = self._build_context(chat_id, parts)
+        allowed = await self._allowed_reactions(chat_id, message_id)
         self._check(chat_id)
+
+        def result(text: str) -> tuple[str, dict[str, Any]]:
+            explained = assist.parse_explain(text, allowed)
+            return (summaries.linkify(assist.clean_headings(explained.text), context.source),
+                    {"messageId": message_id, "kind": explained.kind,
+                     "reactions": explained.reactions, "quickReply": explained.reply})
+
+        def partial(text: str) -> None:
+            markdown, data = result(text)
+            self._set_summary(key, SummaryState("pending", "explain", markdown, name=name,
+                                                data=data))
+
         reply = await self._streamed(
             chat_id, "explain", self.cheap_model,
-            assist.explain_prompt(context, self.translate_to),
-            self._message_cache_key(chat_id, parts, "explain", self.cheap_model),
-            lambda text: self._set_summary(key, SummaryState(
-                "pending", "explain",
-                summaries.linkify(assist.clean_headings(text), context.source), name=name)))
-        return _Result(summaries.linkify(assist.clean_headings(reply.text), context.source),
-                       reply.cost,
-                       context.count, data={"messageId": message_id})
+            assist.explain_prompt(context, self.translate_to, allowed),
+            self._message_cache_key(chat_id, parts, "explain", self.cheap_model), partial)
+        text, data = result(reply.text)
+        return _Result(text, reply.cost, context.count, data=data)
+
+    async def _allowed_reactions(self, chat_id: int, message_id: int) -> list[str]:
+        """Emoji reactions the user can set on the message (TDLib, nothing leaves the
+        computer); Telegram's standard ones if TDLib can't tell."""
+        try:
+            available = await self._client.send({
+                "@type": "getMessageAvailableReactions", "chat_id": chat_id,
+                "message_id": message_id, "row_size": 8})
+        except TdError:
+            return DEFAULT_REACTIONS[:MAX_ALLOWED_REACTIONS]
+        return (available_keys(available, MAX_ALLOWED_REACTIONS)
+                or DEFAULT_REACTIONS[:MAX_ALLOWED_REACTIONS])
 
     async def _run_replies(self, chat_id: int, message_id: int, name: str, modifier: str,
                            already: list[str]) -> _Result:
@@ -873,18 +948,20 @@ class AiService:
         self._check(chat_id)
 
         def partial(text: str) -> None:
-            analysis, options = assist.parse_reply_options(text)
+            analysis, options = assist.parse_reply_options(text, self.reads)
             self._set_summary(key, SummaryState(
                 "pending", "reply", assist.reply_markdown(text), name=name,
                 data={"analysis": analysis, "options": options, "messageId": message_id}))
 
         reply = await self._streamed(
             chat_id, "reply", self.summary_model,
-            assist.reply_options_prompt(context, self.translate_to, modifier, already),
+            assist.reply_options_prompt(context, self.translate_to, modifier, already,
+                                        reads=self.reads),
             self._message_cache_key(chat_id, parts, "reply", self.summary_model,
-                                    modifier + "|" + "|".join(already)),
+                                    ",".join(self.reads) + "|" + modifier + "|"
+                                    + "|".join(already)),
             partial, temperature=0.7)
-        analysis, options = assist.parse_reply_options(reply.text)
+        analysis, options = assist.parse_reply_options(reply.text, self.reads)
         if not options:
             raise AiUnavailable("The model returned no usable replies, try again")
         return _Result(assist.reply_markdown(reply.text), reply.cost, context.count,
@@ -983,9 +1060,32 @@ class AiService:
         chat = self._chats.chats.get(sender.get("chat_id", 0))
         return chat.title if chat else ""
 
-    def _reader(self) -> str:
+    def _reader(self, with_username: bool = False) -> str:
         me = self._users.users.get(self._users.my_id or 0)
-        return me.full_name if me else ""
+        if me is None:
+            return ""
+        if with_username and me.usernames:
+            return f"{me.full_name} (@{me.usernames[0]})"
+        return me.full_name
+
+    async def _marks_for(self, chat_id: int, messages: list[Any]) -> summaries.Reader:
+        """What marks the summary input as concerning the user: their id, @usernames and own
+        messages, including older ones that messages in the slice reply to (asked from TDLib,
+        nothing is sent anywhere)."""
+        me = self._users.my_id or 0
+        own = {m["id"] for m in messages if summaries.is_own(m, me)}
+        known = {m["id"] for m in messages}
+        missing = sorted({r for m in messages if (r := summaries.replied_id(m)) and r not in known})
+        if missing:
+            try:
+                found = await self._client.send({"@type": "getMessages", "chat_id": chat_id,
+                                                 "message_ids": missing[:200]})
+                own.update(m["id"] for m in found.get("messages") or []
+                           if m and summaries.is_own(m, me))
+            except TdError as e:
+                log.info("getMessages for replied messages failed: %s", e)
+        user = self._users.me
+        return summaries.Reader(me, user.usernames if user else (), frozenset(own))
 
     def _emit(self, kind: ChangeKind, payload: Any) -> None:
         for listener in list(self._listeners):

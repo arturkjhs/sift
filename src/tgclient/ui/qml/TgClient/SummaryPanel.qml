@@ -3,8 +3,9 @@ import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
 // The AI panel of the open chat: summaries, a person, questions about the chat or a file,
-// dates and meetings, answers to a question. Citations are tgc://message/<id> links that
-// scroll the feed.
+// dates and meetings, answers to a question, one message explained. Citations are
+// tgc://message/<id> links that scroll the feed. An explained light message (a joke, emoji,
+// agreement) offers reactions and one short reply instead of an analysis.
 Rectangle {
     id: root
     objectName: "summaryPanel"
@@ -12,10 +13,12 @@ Rectangle {
 
     signal closeRequested()
     signal messageRequested(var messageId)
+    signal reactionRequested(var messageId, string key)
 
     readonly property bool pending: ai.summaryState === "pending"
     readonly property bool streams: kind === "explain" || kind === "reply"
     readonly property bool hasOptions: kind === "reply" && ai.replyOptions.length > 0
+    readonly property bool light: kind === "explain" && ai.explainKind === "light"
     property bool analysisShown: false
     readonly property string kind: ai.subject === "" ? "summary"
                                    : ai.subject.startsWith("user:") || ai.subject.startsWith("chat:")
@@ -156,12 +159,97 @@ Rectangle {
                     if (id !== 0)
                         root.messageRequested(id)
                     else
-                        Qt.openUrlExternally(link)
+                        messages.openLink(link)  // t.me message links stay in the app
                 }
+
+                // Citation chips: who wrote it and when.
+                ToolTip.text: hoveredLink !== "" ? ai.linkTooltip(hoveredLink) : ""
+                ToolTip.visible: ToolTip.text !== ""
+                ToolTip.delay: 300
 
                 HoverHandler {
                     cursorShape: summaryText.linkAt(point.position.x, point.position.y) !== ""
                                  ? Qt.PointingHandCursor : Qt.ArrowCursor
+                }
+            }
+
+            // A light message: react, or answer in a few words.
+            Flow {
+                objectName: "quickReactions"
+                visible: root.light && ai.quickReactions.length > 0
+                width: parent.width
+                spacing: 6
+                Repeater {
+                    model: root.light ? ai.quickReactions : []
+                    Rectangle {
+                        id: chip
+                        objectName: "quickReaction"
+                        required property var modelData
+                        property bool sent: false
+                        width: 46
+                        height: 34
+                        radius: 17
+                        color: sent ? Theme.accent
+                             : Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b,
+                                       chipHover.hovered ? 0.22 : 0.13)
+                        Accessible.role: Accessible.Button
+                        Accessible.name: qsTr("React with %1").arg(modelData.label)
+
+                        Text {
+                            anchors.centerIn: parent
+                            text: chip.modelData.label
+                            textFormat: Text.PlainText
+                            font.pixelSize: 18
+                        }
+                        HoverHandler {
+                            id: chipHover
+                            cursorShape: Qt.PointingHandCursor
+                        }
+                        TapHandler {
+                            onTapped: {
+                                root.reactionRequested(ai.explainedMessageId, chip.modelData.key)
+                                chip.sent = true
+                            }
+                        }
+                    }
+                }
+            }
+            Rectangle {
+                objectName: "quickReply"
+                visible: root.light && ai.quickReply !== ""
+                width: contentColumn.width
+                height: quickColumn.implicitHeight + 20
+                radius: 10
+                color: Theme.window
+                border.width: 1
+                border.color: Theme.separator
+
+                Column {
+                    id: quickColumn
+                    x: 10
+                    y: 10
+                    width: parent.width - 20
+                    spacing: 6
+
+                    TextEdit {
+                        width: parent.width
+                        text: ai.quickReply
+                        textFormat: TextEdit.PlainText
+                        wrapMode: TextEdit.Wrap
+                        readOnly: true
+                        selectByMouse: true
+                        color: Theme.text
+                        selectionColor: Theme.accent
+                        selectedTextColor: Theme.textOnAccent
+                        font.pixelSize: Theme.fontBody
+                    }
+                    PillButton {
+                        objectName: "insertQuickReply"
+                        text: qsTr("Insert")
+                        iconName: "edit"
+                        enabled: !root.pending
+                        onClicked: ai.insertQuickReply()
+                    }
                 }
             }
 
@@ -271,6 +359,14 @@ Rectangle {
                 enabled: !root.pending
                 onClicked: ai.refineReplies("formal")
             }
+        }
+
+        PillButton {  // something is asked of the user: offer full reply options
+            objectName: "suggestFromExplain"
+            visible: root.kind === "explain" && ai.explainKind === "actionable" && !root.pending
+            text: qsTr("Suggest replies")
+            iconName: "reply"
+            onClicked: ai.suggestReplies(ai.explainedMessageId, ai.summaryName)
         }
 
         PillButton {

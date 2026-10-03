@@ -27,6 +27,8 @@ DEFAULTS: dict[str, Any] = {
     # of the system UI, else English). "translate_to" is the older name of the same setting.
     "ai_language": "",
     "translate_to": "",
+    # Other languages the user reads (codes): suggested replies in them get no translation.
+    "read_languages": [],
     "auto_update": True,  # check GitHub Releases daily (packaged builds only)
 }
 

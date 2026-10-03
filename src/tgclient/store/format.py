@@ -156,6 +156,18 @@ def short_time(timestamp: int, now: datetime | None = None) -> str:
     return when.strftime("%d.%m.%y")
 
 
+def message_stamp(timestamp: int, now: datetime | None = None) -> str:
+    """Time of a message in AI text, links and model input, no words (any language):
+    today 15:52; earlier this year 01.10 15:52; other years 01.10.25 15:52. Local time."""
+    when = datetime.fromtimestamp(timestamp)  # noqa: DTZ006 - local time by design
+    now = now or datetime.now()  # noqa: DTZ005
+    if when.date() == now.date():
+        return when.strftime("%H:%M")
+    if when.year == now.year:
+        return when.strftime("%d.%m %H:%M")
+    return when.strftime("%d.%m.%y %H:%M")
+
+
 def initials(title: str) -> str:
     words = [w for w in title.split() if w[:1].isalnum()]
     if not words:

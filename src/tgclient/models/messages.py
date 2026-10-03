@@ -6,6 +6,7 @@ import asyncio
 import base64
 import html
 import logging
+import re
 from datetime import datetime
 from enum import IntEnum, auto
 from typing import Any
@@ -175,6 +176,7 @@ class MessageListModel(QAbstractListModel):
     actionsReady = Signal("QVariant", "QVariantMap")  # message id, what can be done with it
     editReady = Signal("QVariant", str)  # message id, its text as markdown for the composer
     statusChanged = Signal()
+    linkResolved = Signal("QVariant", "QVariant")  # chat id, message id (0: just the chat)
 
     def __init__(
         self, client: TdClient, chats: ChatStore, users: UserStore,
@@ -362,6 +364,15 @@ class MessageListModel(QAbstractListModel):
             self._spawn(self._actions(history.chat_id, message))
 
     @Slot("QVariant", str)
+    def addReaction(self, message_id: Any, key: str) -> None:
+        """Set a reaction (the AI panel's suggestions); no-op if it is already set."""
+        history = self._history
+        message = history.get(int(message_id or 0)) if history else None
+        if message is not None and not any(
+                r.key == key and r.chosen for r in message_reactions(message)):
+            self.toggleReaction(message_id, key)
+
+    @Slot("QVariant", str)
     def toggleReaction(self, message_id: Any, key: str) -> None:
         history = self._history
         message = history.get(int(message_id or 0)) if history else None
@@ -425,6 +436,27 @@ class MessageListModel(QAbstractListModel):
     @Slot("QVariant", result=int)
     def rowOf(self, message_id: Any) -> int:
         return self._history.row_of(int(message_id)) if self._history else -1
+
+    @Slot(str)
+    def openLink(self, link: str) -> None:
+        """Telegram links to a message (t.me/<chat>/<id>, t.me/c/…, tg://…) open inside the
+        client (linkResolved), anything else in the browser."""
+        if not _TELEGRAM_LINK.match(link):
+            QDesktopServices.openUrl(QUrl(link))
+            return
+        self._spawn(self._open_link(link))
+
+    async def _open_link(self, link: str) -> None:
+        try:
+            info = await self._client.send({"@type": "getMessageLinkInfo", "url": link})
+        except TdError as e:
+            log.info("Not a message link (%s): %s", e.message, link)
+            info = {}
+        chat_id = info.get("chat_id") or 0
+        if chat_id and chat_id in self._chats.chats:
+            self.linkResolved.emit(chat_id, (info.get("message") or {}).get("id") or 0)
+        elif not link.startswith("tg:"):
+            QDesktopServices.openUrl(QUrl(link))
 
     @Slot("QVariant")
     def jumpTo(self, message_id: Any) -> None:
@@ -1288,6 +1320,10 @@ class MessageListModel(QAbstractListModel):
     def _spawn(self, awaitable: Any) -> None:
         task = asyncio.ensure_future(awaitable)
         task.add_done_callback(_log_failure)
+
+
+_TELEGRAM_LINK = re.compile(r"^(?:tg:|(?:https?://)?(?:www\.)?(?:t\.me|telegram\.(?:me|dog))/)",
+                            re.IGNORECASE)
 
 
 def _display_size(media: Media) -> tuple[int, int]:
