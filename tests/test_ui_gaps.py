@@ -28,7 +28,8 @@ class Server(test_forums.Server):
                                  last_message=MESSAGES[60]),
                         {"@type": "updateSupergroup", "supergroup": {
                             "id": SUPERGROUP, "is_forum": True, "is_channel": False,
-                            "member_count": 40}},
+                            "member_count": 40, "status": {
+                                "@type": "chatMemberStatusCreator", "is_member": True}}},
                         {"@type": "updateUser", "user": {"id": 5, "first_name": "Olena",
                                                          "usernames": {
                                                              "active_usernames": ["olena"]}}},
@@ -47,7 +48,11 @@ class Server(test_forums.Server):
                          "next_from_message_id": 0, "@extra": extra}]
             case "getSupergroupFullInfo":
                 return [{"@type": "supergroupFullInfo", "description": "Routes, trips and gear.",
-                         "member_count": 40, "can_get_members": True, "@extra": extra}]
+                         "member_count": 40, "can_get_members": True, "@extra": extra,
+                         "invite_link": {"invite_link": "https://t.me/+AbCdEfClimb"}}]
+            case "getContacts":
+                return [{"@type": "users", "total_count": 2, "user_ids": [5, 6],
+                         "@extra": extra}]
             case "getUserFullInfo":
                 return [{"@type": "userFullInfo", "bio": {"text": "Leads on weekends"},
                          "group_in_common_count": 1, "@extra": extra}]
@@ -304,6 +309,30 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(bars), 2)
         _screenshot(self.window, "comments")
         self.assertEqual(self.warnings, [], "QML warnings with comments")
+
+
+    async def test_new_group_and_admin_tools(self) -> None:
+        from PySide6.QtCore import QMetaObject, QObject, Q_ARG
+
+        self.open_chat(FORUM)
+        await self.settle(0.1)
+        view = self.item("messageView")
+        QMetaObject.invokeMethod(view, "showProfile", Q_ARG("QVariant", FORUM),
+                                 Q_ARG("QVariant", 0))
+        await wait_until(lambda: (self.pump(), self.session.group_admin.inviteLink(FORUM))[1]
+                         != "")
+        await self.settle()
+        self.assertTrue(self.item("inviteLink").isVisible())
+        _screenshot(self.window, "profile-admin")
+        dialog = self.window.findChild(QObject, "newChatDialog")
+        QMetaObject.invokeMethod(dialog, "start", Q_ARG("QVariant", "group"),
+                                 Q_ARG("QVariant", 0))
+        await wait_until(lambda: (self.pump(), len(self.session.contacts.rows))[1] == 2)
+        await self.settle()
+        _screenshot(self.window, "new-group")
+        QMetaObject.invokeMethod(dialog, "close")
+        await self.settle(0.15)
+        self.assertEqual(self.warnings, [], "QML warnings in admin tools")
 
 
 if __name__ == "__main__":

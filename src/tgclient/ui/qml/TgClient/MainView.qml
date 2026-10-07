@@ -75,6 +75,15 @@ SplitView {
                 }
 
                 IconButton {
+                    id: newChatButton
+                    objectName: "newChatButton"
+                    iconName: "edit"
+                    glyphSize: 15
+                    Accessible.name: qsTr("New group or channel")
+                    onClicked: newChatMenu.popup(newChatButton, 0, newChatButton.height + 4)
+                }
+
+                IconButton {
                     objectName: "contactsButton"
                     iconName: "person"
                     glyphSize: 15
@@ -440,6 +449,30 @@ SplitView {
 
     ContactsDialog {
         id: contactsDialog
+    }
+
+    AppMenu {
+        id: newChatMenu
+        objectName: "newChatMenu"
+        AppMenuItem {
+            text: qsTr("New group")
+            iconName: "person"
+            onTriggered: newChatDialog.start("group", 0)
+        }
+        AppMenuItem {
+            text: qsTr("New channel")
+            iconName: "bell"
+            onTriggered: newChatDialog.start("channel", 0)
+        }
+    }
+
+    NewChatDialog {
+        id: newChatDialog
+    }
+
+    Connections {
+        target: groupAdmin
+        function onCreated(chatId) { root.openChat(chatId, 0) }
     }
 
     Connections {

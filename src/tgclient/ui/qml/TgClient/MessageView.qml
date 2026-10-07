@@ -611,6 +611,7 @@ Item {
                 onChatRequested: chatId => root.openChatRequested(chatId, 0)
                 onPersonRequested: userId => messages.openLink("tg://user?id=" + userId)
                 onSearchRequested: root.openSearch()
+                onAddMembersRequested: chatId => addMembersDialog.start("add", chatId)
             }
 
             SummaryPanel {
@@ -850,6 +851,10 @@ Item {
             id: toastTimer
             interval: 3000
         }
+    }
+
+    NewChatDialog {
+        id: addMembersDialog
     }
 
     ScheduledList {

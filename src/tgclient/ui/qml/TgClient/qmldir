@@ -40,3 +40,4 @@ ScheduledList 1.0 ScheduledList.qml
 FolderEditorDialog 1.0 FolderEditorDialog.qml
 PollEditor 1.0 PollEditor.qml
 ContactsDialog 1.0 ContactsDialog.qml
+NewChatDialog 1.0 NewChatDialog.qml

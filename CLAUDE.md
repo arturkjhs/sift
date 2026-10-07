@@ -59,6 +59,8 @@ src/tgclient/
              profile.py (панель профиля чата/человека), contacts.py (контакты), gifs.py (GIF)
   ui/        QObject-контроллеры (auth_controller, shell, voice_player, ai_controller,
              lock (пароль и блокировка), chat_actions (меню чата), devices (сессии),
+             folders (редактор папок), group_admin (группы/каналы: создание, админка),
+             video_note (запись кружков),
              notifications: системные уведомления + бейдж, accounts: мультиаккаунт,
              recorder: запись голосовых, updates: автообновление), animation.py (TGS/WebM:
              кадры + QML-тип `TgClient.Native/AnimatedImage`), image providers
@@ -458,6 +460,14 @@ src/tgclient/
   `getChatFolder` → `FolderEditorDialog` (имя ≤ 12, типы чатов, выбранные чаты) →
   `createChatFolder`/`editChatFolder` (иконка, цвет, исключённые чаты сохраняются как были),
   `deleteChatFolder`, «Move left/right» — `reorderChatFolders` с позицией «All chats».
+- Группы и каналы (`GroupAdmin` = `groupAdmin`): карандаш в сайдбаре → «New group»
+  (`createNewBasicGroupChat` с выбранными контактами; кого не добавили из-за приватности —
+  сообщение) / «New channel» (`createNewSupergroupChat`). Моя роль — `role(chat)` из
+  `PresenceStore.group_status`; QML-привязки к `role()`/`inviteLink()` зависят от `revision`.
+  Владельцу/админу в профиле: инвайт-ссылка (из full info, нет — `replacePrimaryChatInviteLink`),
+  «Add members» (`addChatMembers`), правка имени/описания, удаление (владелец, `deleteChat`);
+  правый клик по участнику — админ (`setChatMemberStatus` с `ADMIN_RIGHTS`, без права
+  назначать других) / снять / удалить (`banChatMember`).
 - Контакты: кнопка-человек в сайдбаре → `ContactsDialog` (`ContactsModel` = `contacts`):
   `getContacts`/`searchContacts`, онлайн сверху, клик — `createPrivateChat` → открыть;
   «Add» — `importContacts` по номеру (нет в Telegram — ошибка); в профиле не-контакта —

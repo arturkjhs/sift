@@ -14,6 +14,19 @@ Rectangle {
     signal chatRequested(var chatId)
     signal personRequested(var userId)
     signal searchRequested()
+    signal addMembersRequested(var chatId)
+
+    // My role in the group or channel (owner / admin / member / ""), and its invite link.
+    readonly property string myRole: (groupAdmin.revision, profile.isUser ? ""
+                                       : groupAdmin.role(profile.chatId))
+    readonly property bool isAdmin: myRole === "owner" || myRole === "admin"
+    readonly property string inviteLink: (groupAdmin.revision, isAdmin
+                                          ? groupAdmin.inviteLink(profile.chatId) : "")
+    property bool editing: false
+    property var memberMenuUser: 0
+
+    readonly property var shownChat: profile.chatId
+    onShownChatChanged: root.editing = false
 
     component Field: ColumnLayout {
         property alias label: fieldLabel.text
@@ -94,6 +107,41 @@ Rectangle {
             text: personRow.badge
             color: Theme.accent
             font.pixelSize: Theme.fontSmall
+        }
+    }
+
+    AppMenu {
+        id: memberMenu
+        objectName: "memberMenu"
+        AppMenuItem {
+            visible: root.myRole === "owner" && (root.memberMenuUser.role || "") !== "admin"
+            text: qsTr("Make admin")
+            iconName: "person"
+            onTriggered: groupAdmin.setAdmin(profile.chatId, root.memberMenuUser.userId, true)
+        }
+        AppMenuItem {
+            visible: root.myRole === "owner" && (root.memberMenuUser.role || "") === "admin"
+            text: qsTr("Remove admin rights")
+            iconName: "person"
+            onTriggered: groupAdmin.setAdmin(profile.chatId, root.memberMenuUser.userId, false)
+        }
+        AppMenuItem {
+            text: qsTr("Remove from the group")
+            iconName: "close"
+            danger: true
+            onTriggered: adminConfirm.ask(
+                qsTr("Remove %1 from the group?").arg(root.memberMenuUser.name || ""), "",
+                qsTr("Remove"), "", {remove: root.memberMenuUser.userId})
+        }
+    }
+
+    ConfirmDialog {
+        id: adminConfirm
+        onAccepted: (checked, payload) => {
+            if (payload !== null && typeof payload === "object" && payload.remove)
+                groupAdmin.removeMember(profile.chatId, payload.remove)
+            else
+                groupAdmin.deleteChat(payload)
         }
     }
 
@@ -192,6 +240,120 @@ Rectangle {
                     }
                 }
 
+                // Editing the name and description (admins).
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: root.editing
+                    spacing: 6
+                    TextField {
+                        id: editTitle
+                        Layout.fillWidth: true
+                        text: profile.title
+                        color: Theme.text
+                        font.pixelSize: Theme.fontBody
+                        padding: 8
+                        background: Rectangle {
+                            radius: 8
+                            color: Theme.field
+                            border.width: 1
+                            border.color: editTitle.activeFocus ? Theme.accent : Theme.fieldBorder
+                        }
+                    }
+                    TextArea {
+                        id: editDescription
+                        Layout.fillWidth: true
+                        text: profile.description
+                        placeholderText: qsTr("Description")
+                        wrapMode: TextArea.Wrap
+                        color: Theme.text
+                        placeholderTextColor: Theme.textMuted
+                        font.pixelSize: Theme.fontBody
+                        padding: 8
+                        background: Rectangle {
+                            radius: 8
+                            color: Theme.field
+                            border.width: 1
+                            border.color: editDescription.activeFocus ? Theme.accent
+                                                                      : Theme.fieldBorder
+                        }
+                    }
+                    RowLayout {
+                        Item { Layout.fillWidth: true }
+                        PillButton {
+                            text: qsTr("Cancel")
+                            onClicked: root.editing = false
+                        }
+                        PillButton {
+                            text: qsTr("Save")
+                            filled: true
+                            onClicked: {
+                                groupAdmin.editInfo(profile.chatId, editTitle.text,
+                                                    editDescription.text)
+                                root.editing = false
+                            }
+                        }
+                    }
+                }
+
+                // Admin tools: invite link, members, edit, delete.
+                ColumnLayout {
+                    Layout.fillWidth: true
+                    visible: root.isAdmin && !root.editing
+                    spacing: 6
+                    Text {
+                        text: qsTr("Invite link")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                        font.weight: Font.DemiBold
+                    }
+                    TextEdit {
+                        objectName: "inviteLink"
+                        Layout.fillWidth: true
+                        readOnly: true
+                        selectByMouse: true
+                        wrapMode: TextEdit.WrapAnywhere
+                        text: root.inviteLink !== "" ? root.inviteLink : qsTr("Loading\u2026")
+                        color: Theme.accent
+                        font.pixelSize: Theme.fontBody
+                    }
+                    Flow {
+                        Layout.fillWidth: true
+                        spacing: 6
+                        PillButton {
+                            text: qsTr("Copy")
+                            iconName: "copy"
+                            enabled: root.inviteLink !== ""
+                            onClicked: groupAdmin.copyInviteLink(profile.chatId)
+                        }
+                        PillButton {
+                            text: qsTr("New link")
+                            iconName: "refresh"
+                            onClicked: groupAdmin.resetInviteLink(profile.chatId)
+                        }
+                        PillButton {
+                            visible: profile.members.length > 0 || root.myRole !== ""
+                            text: qsTr("Add members")
+                            iconName: "person"
+                            onClicked: root.addMembersRequested(profile.chatId)
+                        }
+                        PillButton {
+                            text: qsTr("Edit")
+                            iconName: "edit"
+                            onClicked: root.editing = true
+                        }
+                        PillButton {
+                            visible: root.myRole === "owner"
+                            text: qsTr("Delete")
+                            iconName: "trash"
+                            danger: true
+                            onClicked: adminConfirm.ask(
+                                qsTr("Delete \u201c%1\u201d for everyone?").arg(profile.title),
+                                qsTr("All messages and members go. This can't be undone."),
+                                qsTr("Delete"), "", profile.chatId)
+                        }
+                    }
+                }
+
                 Field { label: qsTr("Username"); value: profile.username ? "@" + profile.username : "" }
                 Field { label: qsTr("Phone"); value: profile.phone }
                 Field {
@@ -210,6 +372,7 @@ Rectangle {
                 Repeater {
                     model: profile.members
                     PersonRow {
+                        id: memberRow
                         required property var modelData
                         title: modelData.name
                         detail: modelData.status
@@ -219,6 +382,14 @@ Rectangle {
                         initials: modelData.initials
                         colorIndex: modelData.colorIndex
                         onClicked: profile.open(0, modelData.userId)
+                        TapHandler {
+                            acceptedButtons: Qt.RightButton
+                            enabled: root.isAdmin && memberRow.modelData.role !== "owner"
+                            onTapped: {
+                                root.memberMenuUser = memberRow.modelData
+                                memberMenu.popup()
+                            }
+                        }
                     }
                 }
 
