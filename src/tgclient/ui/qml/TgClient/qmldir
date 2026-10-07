@@ -33,3 +33,4 @@ TopicList 1.0 TopicList.qml
 LockScreen 1.0 LockScreen.qml
 LockWindow 1.0 LockWindow.qml
 ConfirmDialog 1.0 ConfirmDialog.qml
+ProfilePanel 1.0 ProfilePanel.qml

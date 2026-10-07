@@ -7,6 +7,14 @@ Item {
     objectName: "messageView"
     property var replyToId: 0
     property bool summaryOpen: false
+    property bool profileOpen: false
+    onSummaryOpenChanged: if (summaryOpen) profileOpen = false
+    onProfileOpenChanged: if (profileOpen) summaryOpen = false
+
+    function showProfile(chatId, userId) {
+        profile.open(chatId, userId)
+        root.profileOpen = true
+    }
     property var highlightId: 0          // message to flash after a jump (search, quote, summary)
     readonly property bool isGroupChat: messages.chatType === "group" || messages.chatType === "supergroup"
 
@@ -30,6 +38,7 @@ Item {
                 list.anchorId = 0
                 root.loadDraft(composerModel.draftText, composerModel.draftReplyTo)
                 root.summaryOpen = false
+                root.profileOpen = false
                 composer.focusInput()
             }
         }
@@ -186,6 +195,14 @@ Item {
                 anchors.right: aiTools.left
                 anchors.rightMargin: 8
                 anchors.verticalCenter: parent.verticalCenter
+
+                // The title opens the chat's profile.
+                HoverHandler { cursorShape: Qt.PointingHandCursor }
+                TapHandler {
+                    objectName: "headerTap"
+                    onTapped: root.profileOpen ? root.profileOpen = false
+                                               : root.showProfile(messages.chatId, 0)
+                }
 
                 Text {
                     width: parent.width
@@ -549,6 +566,27 @@ Item {
                 implicitWidth: 1
                 visible: summaryPanel.visible
                 color: Theme.separator
+            }
+
+            Rectangle {
+                Layout.fillHeight: true
+                implicitWidth: 1
+                visible: profilePanel.visible
+                color: Theme.separator
+            }
+
+            ProfilePanel {
+                id: profilePanel
+                Layout.fillHeight: true
+                Layout.preferredWidth: Math.min(340, root.width * 0.4)
+                visible: root.profileOpen
+                onCloseRequested: root.profileOpen = false
+                onMessageRequested: (chatId, messageId) => chatId === messages.chatId
+                                    ? root.showMessage(messageId)
+                                    : root.openChatRequested(chatId, messageId)
+                onChatRequested: chatId => root.openChatRequested(chatId, 0)
+                onPersonRequested: userId => messages.openLink("tg://user?id=" + userId)
+                onSearchRequested: root.openSearch()
             }
 
             SummaryPanel {
@@ -1552,6 +1590,13 @@ Item {
                 root.replyToId = personMenu.messageId
                 composer.focusInput()
             }
+        }
+        AppMenuItem {
+            objectName: "viewProfileItem"
+            text: qsTr("View profile")
+            iconName: "person"
+            visible: personMenu.senderKey.startsWith("user:")
+            onTriggered: root.showProfile(0, Number(personMenu.senderKey.slice(5)))
         }
         AppMenuItem {
             text: qsTr("Summarize this person")

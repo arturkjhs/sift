@@ -53,7 +53,8 @@ src/tgclient/
              messages.py (лента открытого чата, отправка, прочтение, действия над сообщениями,
              статус в шапке), composer.py (черновики, вложения, вставка из буфера, свой typing),
              chat_picker.py (выбор чата для пересылки), viewer.py (полноэкранный просмотрщик),
-             search.py (результаты поиска: секции, debounce, сниппеты), topics.py (темы форума)
+             search.py (результаты поиска: секции, debounce, сниппеты), topics.py (темы форума),
+             profile.py (панель профиля чата/человека)
   ui/        QObject-контроллеры (auth_controller, shell, voice_player, ai_controller,
              notifications: системные уведомления + бейдж, accounts: мультиаккаунт,
              recorder: запись голосовых, updates: автообновление), animation.py (TGS/WebM:
@@ -412,6 +413,12 @@ src/tgclient/
   шаг — `chatSearchJump(id)` → `showMessage`. Совпадения в тексте подсвечивает
   `richtext.highlight_html` (только вне тегов; метка времени вставляется после — через
   `_TAIL`-заглушку, иначе подсвечивались бы её цифры).
+- Профиль (`ProfileModel` = `profile`, `ProfilePanel.qml` справа вместо панели AI — открыта
+  одна из двух): клик по заголовку чата или «View profile» в меню человека. Человек —
+  `getUserFullInfo` (bio, `bot_info.short_description`), `getGroupsInCommon`; группа —
+  `getSupergroupFullInfo`/`getBasicGroupFullInfo`, участники (`searchChatMembers`, владелец и
+  админы первыми). Вкладки Media/Files/Links/Voice — `searchChatMessages` с фильтрами, по 50,
+  догрузка у конца. Картинки строк ждут загрузки через `_pending` (file id → строки).
 - Меню чата в списке (правый клик): `ChatActions` (`chatActions` в QML) — закрепить
   (`toggleChatIsPinned` в текущем списке), mute на 1 ч / 8 ч / 2 дня / навсегда
   (`setChatNotificationSettings`: полный объект настроек чата из `Chat.notification_settings`,

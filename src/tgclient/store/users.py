@@ -19,6 +19,7 @@ class User:
     usernames: tuple[str, ...] = ()  # active @usernames, without the @
     is_bot: bool = False
     is_verified: bool = False
+    phone: str = ""
 
     @property
     def full_name(self) -> str:
@@ -67,6 +68,7 @@ class UserStore:
             is_bot=(raw.get("type") or {}).get("@type") == "userTypeBot",
             is_verified=bool((raw.get("verification_status") or {}).get("is_verified")
                              or raw.get("is_verified")),
+            phone=raw.get("phone_number", ""),
         )
         self._emit(raw["id"])
 

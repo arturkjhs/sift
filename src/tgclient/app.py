@@ -23,6 +23,7 @@ from .models.composer import ComposerModel
 from .models.emoji import EmojiModel
 from .models.folders import FolderModel
 from .models.messages import MessageListModel
+from .models.profile import ProfileModel
 from .models.search import SearchModel
 from .models.stickers import StickerModel
 from .models.topics import TopicListModel
@@ -131,6 +132,7 @@ class Session:
         )
         self.chat_list = ChatListModel(self.chats, self.users, self.presence)
         self.chat_actions = ChatActions(self.client, self.chats)
+        self.profile = ProfileModel(self.client, self.chats, self.users, self.presence)
         self.folders = FolderModel(self.chats)
         if router is None and settings.openrouter_api_key:
             router = OpenRouter(settings.openrouter_api_key)
@@ -396,6 +398,7 @@ def bind_session(engine: QQmlApplicationEngine, images: TdImageProvider,
     context.setContextProperty("auth", session.auth)
     context.setContextProperty("chatList", session.chat_list)
     context.setContextProperty("chatActions", session.chat_actions)
+    context.setContextProperty("profile", session.profile)
     context.setContextProperty("folders", session.folders)
     context.setContextProperty("messages", session.messages)
     context.setContextProperty("topics", session.topics)

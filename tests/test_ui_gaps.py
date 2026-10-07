@@ -45,6 +45,15 @@ class Server(test_forums.Server):
             case "searchChatMessages":
                 return [{"@type": "foundChatMessages", "total_count": 0, "messages": [],
                          "next_from_message_id": 0, "@extra": extra}]
+            case "getSupergroupFullInfo":
+                return [{"@type": "supergroupFullInfo", "description": "Routes, trips and gear.",
+                         "member_count": 40, "can_get_members": True, "@extra": extra}]
+            case "getUserFullInfo":
+                return [{"@type": "userFullInfo", "bio": {"text": "Leads on weekends"},
+                         "group_in_common_count": 1, "@extra": extra}]
+            case "getGroupsInCommon":
+                return [{"@type": "chats", "total_count": 1, "chat_ids": [FORUM],
+                         "@extra": extra}]
             case "searchChatMembers":
                 return [{"@type": "chatMembers", "total_count": 2, "@extra": extra, "members": [
                     {"member_id": {"@type": "messageSenderUser", "user_id": u}}
@@ -207,6 +216,25 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(field.property("text"), "thanks [Petr Novák](tg://user?id=6) ")
         self.assertFalse(popup.isVisible())
         self.assertEqual(self.warnings, [], "QML warnings with mentions")
+
+
+    async def test_profile_panel(self) -> None:
+        self.open_chat(FORUM)
+        await self.settle(0.1)
+        view = self.item("messageView")
+        from PySide6.QtCore import QMetaObject, Q_ARG
+
+        QMetaObject.invokeMethod(view, "showProfile", Q_ARG("QVariant", FORUM),
+                                 Q_ARG("QVariant", 0))
+        await wait_until(lambda: (self.pump(), len(self.session.profile.members))[1] == 2)
+        await self.settle()
+        self.assertTrue(self.item("profilePanel").isVisible())
+        _screenshot(self.window, "profile-chat")
+        self.session.profile.open(0, 6)
+        await wait_until(lambda: (self.pump(), self.session.profile.description)[1] != "")
+        await self.settle()
+        _screenshot(self.window, "profile-person")
+        self.assertEqual(self.warnings, [], "QML warnings in the profile")
 
 
 if __name__ == "__main__":
