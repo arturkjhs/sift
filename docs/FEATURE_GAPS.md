@@ -208,6 +208,32 @@
 
 ---
 
+## Поиск по сообщениям конкретного человека
+
+Официальный клиент умеет только фильтр по отправителю в поиске одного чата. Здесь — четыре
+шага, каждый отдельным коммитом.
+
+- [x] Сообщения человека в текущем чате: «Messages from …» из меню человека и профиля, поиск
+  по ним с подсветкой, темы форума, сообщения «от имени» чата.
+  → `services/person_search.py` (`PersonSearch.page`), `models/person_messages.py`,
+  `PersonMessagesPanel.qml`.
+- [x] Фильтр «From:» в поиске чата и в глобальном поиске, синтаксис `from:@username`, Esc
+  сначала чистит запрос, потом чип.
+  → `split_from` / `resolve_sender`, `models/sender_picker.py`, `SenderChip.qml`,
+  `messages.setChatSearchSender`, `search.setSender`.
+- [x] «Во всех общих чатах»: `getGroupsInCommon` + личный чат, без секретных, по 20 на чат,
+  3 запроса параллельно, FLOOD_WAIT; группировка по чатам, «More», «Chats searched: N»;
+  глобальный from: = локальный индекс + общие чаты.
+  → `PersonSearch.common_chats` / `in_chats`, `personMessages.allChats`, `SearchModel._common_chats`.
+- [x] «Check what <name> said…» (AI): только чаты с AI on, вердикт + объяснение + цитаты из
+  настоящих сообщений, проверка доказательств кодом, кэш только в памяти.
+  → `AiService.check_claim`, `assist.claim_prompt` / `parse_claim`, вкладка Check в
+  `PersonMessagesPanel.qml`.
+- **Не проверено вживую:** пустой query с `sender_id`, темп поиска по 30+ общим чатам и
+  FLOOD_WAIT, качество вердикта на 3–4 реальных случаях.
+
+---
+
 ## Вне скоупа
 
 Звонки и групповые звонки, трансляции, Stories, мини-приложения, Telegram Stars и платежи,
