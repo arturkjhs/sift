@@ -83,6 +83,7 @@ class ChatHistory:
             "updateMessageEdited": self._on_edited,
             "updateMessageInteractionInfo": self._on_interaction_info,
             "updateMessageIsPinned": self._on_is_pinned,
+            "updatePoll": self._on_poll,
             "updateDeleteMessages": self._on_delete,
         }
         self._unsubscribe = [client.on(t, h) for t, h in handlers.items()]
@@ -395,6 +396,15 @@ class ChatHistory:
             self.messages[row] = {**self.messages[row],
                                   "interaction_info": event.get("interaction_info")}
             self._listener.history_changed(row)
+
+    def _on_poll(self, event: Event) -> None:
+        """Votes changed: the poll is sent by its id, without the message."""
+        poll = event["poll"]
+        for row, message in enumerate(self.messages):
+            content = message.get("content") or {}
+            if (content.get("poll") or {}).get("id") == poll.get("id"):
+                self.messages[row] = {**message, "content": {**content, "poll": poll}}
+                self._listener.history_changed(row)
 
     def _on_is_pinned(self, event: Event) -> None:
         if event.get("chat_id") != self.chat_id:

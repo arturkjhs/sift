@@ -51,6 +51,7 @@ Item {
     required property string playbackPath
     required property bool selected
     required property var linkPreview      // {url, site, title, text, image, ...} or {}
+    required property var poll             // a poll, quiz or checklist, or {}
 
     property bool isGroupChat: false
     property bool flashed: false   // just jumped to: briefly tinted
@@ -245,6 +246,7 @@ Item {
                     media.visible ? media.naturalWidth
                                     + (root.timeBesideMedia ? timeRow.implicitWidth + 12 : 0) : 0,
                     body.visible ? body.implicitWidth : 0,
+                    pollContent.visible ? 300 : 0,
                     linkCard.visible ? linkCard.naturalWidth : 0,
                     translationBlock.visible ? translationBlock.naturalWidth : 0,
                     transcriptText.visible ? transcriptText.implicitWidth
@@ -395,6 +397,13 @@ Item {
                         maxWidth: root.maxContentWidth
                         messageId: root.messageId
                         onActivated: messages.activateMedia(root.messageId)
+                    }
+
+                    PollContent {
+                        id: pollContent
+                        width: parent.width
+                        poll: root.poll || ({})
+                        messageId: root.messageId
                     }
 
                     // Voice transcript: "Transcribe" link, progress, the text, or an error to retry.
@@ -666,8 +675,8 @@ Item {
                     }
 
                     Item {  // room for the time row when there's no text to tuck it into
-                        visible: ((translationBlock.visible || linkCard.visible)
-                                  && !reactionFlow.visible)
+                        visible: ((translationBlock.visible || linkCard.visible
+                                   || pollContent.visible) && !reactionFlow.visible)
                                  || (!body.visible && !root.timeOnMedia && !root.timeBesideMedia
                                      && !reactionFlow.visible)
                         width: 1

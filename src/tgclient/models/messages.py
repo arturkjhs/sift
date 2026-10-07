@@ -44,6 +44,7 @@ from ..store import links
 from ..store.link_preview import message_link_preview
 from ..store.forums import ForumStore, Topic, message_topic_id, topic_obj
 from ..store.pinned import PinnedMessages
+from ..store.polls import poll_view
 from ..store.media import (
     Media,
     album_id,
@@ -127,6 +128,7 @@ class Role(IntEnum):
     PlaybackPath = auto()  # local file to play inline (animated sticker, GIF), "" until ready
     Selected = auto()  # in the multi-selection (Cmd/Ctrl/Shift-click)
     LinkPreview = auto()  # {url, site, title, text, image, width, height, large, label} or {}
+    Poll = auto()  # store.polls.poll_view: a poll, quiz or checklist; {} otherwise
 
 
 # Roles that depend on file state (refreshed when a file of the message changes).
@@ -559,6 +561,24 @@ class MessageListModel(QAbstractListModel):
         if self._history is not None:
             self._spawn(self._request({"@type": "unpinAllChatMessages",
                                        "chat_id": self._history.chat_id}, "Unpinning all"))
+
+    @Slot("QVariant", "QVariantList")
+    def vote(self, message_id: Any, options: list[Any]) -> None:
+        """Answer a poll ([] takes the vote back)."""
+        if self._history is not None and message_id:
+            self._spawn(self._request({
+                "@type": "setPollAnswer", "chat_id": self._history.chat_id,
+                "message_id": int(message_id), "option_ids": [int(o) for o in options]},
+                "Voting"))
+
+    @Slot("QVariant", int, bool)
+    def markTask(self, message_id: Any, task_id: int, done: bool) -> None:
+        if self._history is not None and message_id:
+            self._spawn(self._request({
+                "@type": "markChecklistTasksAsDone", "chat_id": self._history.chat_id,
+                "message_id": int(message_id),
+                "marked_as_done_task_ids": [task_id] if done else [],
+                "marked_as_not_done_task_ids": [] if done else [task_id]}, "Marking a task"))
 
     @Slot("QVariant")
     def copyLink(self, message_id: Any) -> None:
@@ -1289,6 +1309,8 @@ class MessageListModel(QAbstractListModel):
                     return ""
                 return self._short_text(reply)
             case Role.MediaLabel:
+                if content.get("@type") in ("messagePoll", "messageChecklist"):
+                    return ""  # drawn as a poll
                 return "" if self._media(message) else media_label(content)
             case Role.Transcript | Role.TranscriptState:
                 transcript = (self._ai.transcript(history.chat_id, message["id"])
@@ -1323,6 +1345,9 @@ class MessageListModel(QAbstractListModel):
                 return bool(album) and row != album[0]
             case Role.LinkPreview:
                 return self._link_preview(message)
+            case Role.Poll:
+                return poll_view(content, lambda sender: self._sender_name(
+                    {"sender_id": sender}))
             case Role.Selected:
                 album = self._album_range(row)
                 members = history.messages[album[0]:album[1] + 1] if album else [message]

@@ -159,8 +159,9 @@
   → M9: `MediaViewer.qml`, `models/viewer.py`.
 - [x] **Альбомы.** Группировка по `media_album_id` в одну сетку-пузырь.
   → M9: `store/album.py`.
-- [ ] **Опросы и чек-листы:** рендер вариантов, голосование (`setPollAnswer`), результаты;
+- [x] **Опросы и чек-листы:** рендер вариантов, голосование (`setPollAnswer`), результаты;
   чек-листы — отметка пунктов.
+  → `store/polls.py`, `PollContent.qml`, `messages.vote/markTask`, `updatePoll` в `ChatHistory`.
 - [ ] **Кнопки ботов.** Inline-клавиатура (`getCallbackQueryAnswer`, url-кнопки), обычная
   клавиатура бота над полем ввода.
 - [ ] **Комментарии к постам каналов** (обсуждение через связанную группу).

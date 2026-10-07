@@ -49,6 +49,7 @@ src/tgclient/
   store/link_preview.py  linkPreview → карточка (сайт, заголовок, описание, картинка)
   store/pinned.py    закреплённые сообщения открытого чата/темы для полосы под шапкой
   store/forums.py    форумы: супергруппы с темами, список тем и их счётчики
+  store/polls.py     опросы, викторины, чек-листы → вид для QML
   models/    Qt-модели для QML: chat_list.py (сортированный список с move-анимацией), folders.py,
              messages.py (лента открытого чата, отправка, прочтение, действия над сообщениями,
              статус в шапке), composer.py (черновики, вложения, вставка из буфера, свой typing),
@@ -413,6 +414,11 @@ src/tgclient/
   шаг — `chatSearchJump(id)` → `showMessage`. Совпадения в тексте подсвечивает
   `richtext.highlight_html` (только вне тегов; метка времени вставляется после — через
   `_TAIL`-заглушку, иначе подсвечивались бы её цифры).
+- Опросы/чек-листы: роль `poll` (`store/polls.poll_view`) → `PollContent.qml` в пузыре.
+  Голос — `messages.vote(id, [индексы])` (`setPollAnswer`, `[]` — отозвать; один ответ — сразу
+  по клику, несколько — галочки и «Vote»), результаты после голоса/закрытия; `updatePoll`
+  приходит без сообщения — `ChatHistory` ищет его по `poll.id`. Пункты чек-листа —
+  `markTask` (`markChecklistTasksAsDone`), если `can_mark_tasks_as_done`.
 - Профиль (`ProfileModel` = `profile`, `ProfilePanel.qml` справа вместо панели AI — открыта
   одна из двух): клик по заголовку чата или «View profile» в меню человека. Человек —
   `getUserFullInfo` (bio, `bot_info.short_description`), `getGroupsInCommon`; группа —

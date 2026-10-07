@@ -237,5 +237,28 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.warnings, [], "QML warnings in the profile")
 
 
+    async def test_polls_in_the_feed(self) -> None:
+        import test_polls
+
+        self.open_chat(FORUM)
+        self.session.messages.openTopic(7)
+        await wait_until(lambda: (self.pump(), self.session.messages.rowCount())[1] > 0)
+        topic = {"@type": "messageTopicForum", "forum_topic_id": 7}
+        for message in ({**test_polls.poll_message(101, chosen=0), "chat_id": FORUM,
+                         "topic_id": topic},
+                        {**test_polls.poll_message(102, multiple=True), "chat_id": FORUM,
+                         "topic_id": topic},
+                        {**MESSAGES[60], "id": 103, "content": test_polls.CHECKLIST}):
+            self.session.client._dispatch({"@type": "updateNewMessage", "message": message})
+        await self.settle()
+        feed = next(i for i in _all_items(self.window.contentItem())
+                    if i.metaObject().className().startswith("QQuickListView")
+                    and i.property("model") is self.session.messages)
+        feed.positionViewAtBeginning()
+        await self.settle()
+        _screenshot(self.window, "polls")
+        self.assertEqual(self.warnings, [], "QML warnings with polls")
+
+
 if __name__ == "__main__":
     unittest.main()
