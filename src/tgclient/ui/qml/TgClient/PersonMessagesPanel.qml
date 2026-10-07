@@ -2,8 +2,8 @@ import QtQuick
 import QtQuick.Controls.Basic
 import QtQuick.Layouts
 
-// One person's messages in the open chat (or, later, in all chats in common): find and check
-// what exactly they wrote. A click jumps to the message.
+// One person's messages in the open chat or in all chats in common with them: find and check
+// what exactly they wrote. A click jumps to the message (opening its chat).
 Rectangle {
     id: root
     objectName: "personMessagesPanel"
@@ -54,6 +54,35 @@ Rectangle {
             onEdited: text => personMessages.query = text
         }
 
+        RowLayout {
+            Layout.fillWidth: true
+            visible: personMessages.canSearchAllChats
+            spacing: 8
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("In all common chats")
+                color: Theme.text
+                font.pixelSize: Theme.fontBody
+            }
+            ToggleSwitch {
+                objectName: "allChatsSwitch"
+                checked: personMessages.allChats
+                onToggled: personMessages.allChats = checked
+            }
+        }
+
+        Text {
+            objectName: "personCoverage"
+            Layout.fillWidth: true
+            visible: personMessages.allChats && personMessages.chatsTotal > 0
+            text: personMessages.chatsSearched < personMessages.chatsTotal
+                  ? qsTr("Chats searched: %1 of %2").arg(personMessages.chatsSearched)
+                                                    .arg(personMessages.chatsTotal)
+                  : qsTr("Chats searched: %1").arg(personMessages.chatsSearched)
+            color: Theme.textMuted
+            font.pixelSize: Theme.fontSmall
+        }
+
         Text {
             Layout.fillWidth: true
             visible: text !== ""
@@ -75,9 +104,10 @@ Rectangle {
             boundsBehavior: Flickable.StopAtBounds
             ScrollBar.vertical: ScrollBar {}
 
-            delegate: Rectangle {
+            delegate: Item {
                 id: row
                 required property string kind
+                required property bool more
                 required property var chatId
                 required property var messageId
                 required property string chatTitle
@@ -87,55 +117,91 @@ Rectangle {
                 required property string media
 
                 width: ListView.view.width
-                height: column.implicitHeight + 16
-                radius: 8
-                color: hover.hovered ? Theme.hover : Theme.window
+                height: kind === "header" ? header.implicitHeight + 10 : card.height
 
-                HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
-                TapHandler { onTapped: root.messageRequested(row.chatId, row.messageId) }
-
-                Column {
-                    id: column
-                    x: 10
-                    y: 8
-                    width: parent.width - 20
-                    spacing: 3
-                    Row {
-                        width: parent.width
-                        spacing: 6
-                        Text {
-                            text: row.time
-                            color: Theme.accent
-                            font.pixelSize: Theme.fontSmall
-                            font.weight: Font.DemiBold
-                        }
-                        Text {
-                            width: parent.width - x
-                            visible: text !== ""
-                            text: row.topic !== "" ? "# " + row.topic : ""
-                            textFormat: Text.PlainText
-                            elide: Text.ElideRight
-                            color: Theme.textMuted
-                            font.pixelSize: Theme.fontSmall
-                        }
-                    }
+                // "In all common chats": the chat's results start here
+                RowLayout {
+                    id: header
+                    visible: row.kind === "header"
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    anchors.leftMargin: 2
+                    spacing: 6
                     Text {
-                        visible: row.media !== ""
-                        text: row.media
-                        color: Theme.textMuted
-                        font.pixelSize: Theme.fontSmall
-                        font.italic: true
-                    }
-                    Text {
-                        width: parent.width
-                        visible: row.text !== ""
-                        text: row.text
-                        textFormat: Text.RichText
-                        wrapMode: Text.Wrap
-                        maximumLineCount: 8
+                        Layout.fillWidth: true
+                        text: row.chatTitle
+                        textFormat: Text.PlainText
                         elide: Text.ElideRight
                         color: Theme.text
-                        font.pixelSize: Theme.fontBody
+                        font.pixelSize: Theme.fontSmall
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        objectName: "chatMore"
+                        visible: row.more
+                        text: qsTr("More")
+                        color: Theme.accent
+                        font.pixelSize: Theme.fontSmall
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onTapped: personMessages.loadMoreIn(row.chatId) }
+                    }
+                }
+
+                Rectangle {
+                    id: card
+                    visible: row.kind !== "header"
+                    width: parent.width
+                    height: visible ? column.implicitHeight + 16 : 0
+                    radius: 8
+                    color: hover.hovered ? Theme.hover : Theme.window
+
+                    HoverHandler { id: hover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler { onTapped: root.messageRequested(row.chatId, row.messageId) }
+
+                    Column {
+                        id: column
+                        x: 10
+                        y: 8
+                        width: parent.width - 20
+                        spacing: 3
+                        Row {
+                            width: parent.width
+                            spacing: 6
+                            Text {
+                                text: row.time
+                                color: Theme.accent
+                                font.pixelSize: Theme.fontSmall
+                                font.weight: Font.DemiBold
+                            }
+                            Text {
+                                width: parent.width - x
+                                visible: text !== ""
+                                text: row.topic !== "" ? "# " + row.topic : ""
+                                textFormat: Text.PlainText
+                                elide: Text.ElideRight
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSmall
+                            }
+                        }
+                        Text {
+                            visible: row.media !== ""
+                            text: row.media
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontSmall
+                            font.italic: true
+                        }
+                        Text {
+                            width: parent.width
+                            visible: row.text !== ""
+                            text: row.text
+                            textFormat: Text.RichText
+                            wrapMode: Text.Wrap
+                            maximumLineCount: 8
+                            elide: Text.ElideRight
+                            color: Theme.text
+                            font.pixelSize: Theme.fontBody
+                        }
                     }
                 }
             }

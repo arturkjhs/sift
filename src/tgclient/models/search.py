@@ -1,4 +1,6 @@
-"""Qt model of search results: matching chats, then matching messages (sections as rows)."""
+"""Qt model of search results: matching chats, then matching messages (sections as rows).
+With a "From:" person: their messages only — the local index plus the server search in every
+chat in common with them (models/person_messages.py's "In all common chats"), by date."""
 
 from __future__ import annotations
 
@@ -21,10 +23,10 @@ from PySide6.QtCore import (
     Slot,
 )
 
-from ..services.person_search import resolve_sender, split_from
+from ..services.person_search import PersonSearch, resolve_sender, split_from
 from ..services.search import Hit, SearchService
 from ..store.chats import ChatStore
-from ..store.format import initials, short_time
+from ..store.format import initials, message_body, short_time
 
 log = logging.getLogger(__name__)
 
@@ -80,20 +82,25 @@ class SearchModel(QAbstractListModel):
     queryRewritten = Signal(str)  # `from:…` taken out of the query: the box shows this
     busyChanged = Signal()
     statusChanged = Signal()
+    coverageChanged = Signal()
 
     def __init__(self, service: SearchService, chats: ChatStore, parent: Any = None,
-                 client: Any = None, users: Any = None) -> None:
+                 client: Any = None, users: Any = None,
+                 person_search: PersonSearch | None = None) -> None:
         super().__init__(parent)
         self._service = service
         self._chats = chats
         self._client = client
         self._users = users
+        self._person_search = person_search
+        self._chats_searched = 0  # "From:" a person: common chats searched on the server
         self._sender = ""  # "From:" filter
         self._sender_name = ""
         self._query = ""
         self._rows: list[dict[str, Any]] = []
         self._busy = False
         self._generation = 0
+        self._task: asyncio.Future[Any] | None = None  # cancelled by a new query
         self._accent = "#0E7C66"
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
@@ -129,6 +136,7 @@ class SearchModel(QAbstractListModel):
             self._timer.start()
         else:
             self._timer.stop()
+            self._cancel()
             self._generation += 1
             self._set_rows([])
             self._set_busy(False)
@@ -159,6 +167,10 @@ class SearchModel(QAbstractListModel):
         self._accent = value
 
     accentColor = Property(str, _get_accent, _set_accent)
+
+    @Property(int, notify=coverageChanged)
+    def chatsSearched(self) -> int:
+        return self._chats_searched
 
     @Property(bool, notify=busyChanged)
     def busy(self) -> bool:
@@ -237,7 +249,13 @@ class SearchModel(QAbstractListModel):
 
     # --- internals --------------------------------------------------------------------------
 
+    def _cancel(self) -> None:
+        if self._task is not None:
+            self._task.cancel()
+            self._task = None
+
     def _run(self) -> None:
+        self._cancel()
         self._generation += 1
         generation = self._generation
         query = self._query.strip()
@@ -245,6 +263,7 @@ class SearchModel(QAbstractListModel):
         chats = [] if sender else self._chat_rows(query)  # From: only messages
         self._set_rows(chats + self._rows_after_chats())
         self._set_busy(True)
+        self._set_coverage(0)
 
         async def search() -> None:
             try:
@@ -255,10 +274,47 @@ class SearchModel(QAbstractListModel):
             if generation != self._generation:
                 return  # the query changed meanwhile
             self._set_rows(chats + self._message_rows(hits, query))
-            self._set_busy(False)
+            if sender.startswith("user:") and self._person_search is not None:
+                await self._common_chats(generation, sender, query, hits)
+            if generation == self._generation:
+                self._set_busy(False)
 
-        task = asyncio.ensure_future(search())
-        task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+        self._task = asyncio.ensure_future(search())
+        self._task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+
+    async def _common_chats(self, generation: int, sender: str, query: str,
+                            local: list[Hit]) -> None:
+        """The person's messages in every chat in common, merged with the local hits by date
+        as each chat answers."""
+        assert self._person_search is not None
+        hits = {(h.chat_id, h.message_id): h for h in local}
+        chat_ids = await self._person_search.common_chats(int(sender.split(":", 1)[1]))
+        searched = 0
+
+        def arrived(result: Any) -> None:
+            nonlocal searched
+            if generation != self._generation:
+                return
+            searched += 1
+            for message in result.messages:
+                key = (message["chat_id"], message["id"])
+                text = (message_body(message.get("content") or {}) or {}).get("text", "")
+                if key not in hits and text:
+                    hits[key] = Hit(message["chat_id"], message["id"], message.get("date", 0),
+                                    self._sender_name, text, True, False)
+            ordered = sorted(hits.values(), key=lambda h: -h.date)
+            self._set_rows(self._message_rows(ordered, query))
+            self._set_coverage(searched)
+
+        try:
+            await self._person_search.in_chats(chat_ids, sender, query, on_chat=arrived)
+        except Exception:
+            log.exception("Search in common chats failed")
+
+    def _set_coverage(self, value: int) -> None:
+        if value != self._chats_searched:
+            self._chats_searched = value
+            self.coverageChanged.emit()
 
     def _rows_after_chats(self) -> list[dict[str, Any]]:
         """While a new query runs, keep showing the previous message results."""

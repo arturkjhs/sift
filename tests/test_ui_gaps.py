@@ -17,6 +17,16 @@ from test_ui import _all_items, _screenshot
 from tgclient.config import Settings
 
 
+PRIVATE_MESSAGES = [(902, "Will bring the rope on Saturday"), (901, "m5 is my favourite route")]
+
+
+def _private(mid: int, text: str) -> dict[str, Any]:
+    """Olena in the private chat (chat 5), newer than anything in the forum."""
+    return {"@type": "message", "id": mid, "chat_id": 5, "date": 1_900_000_000 + mid,
+            "sender_id": {"@type": "messageSenderUser", "user_id": 5}, "is_outgoing": False,
+            "content": {"@type": "messageText", "text": {"text": text, "entities": []}}}
+
+
 class Server(test_forums.Server):
     def __call__(self, req: dict[str, Any]) -> list[dict[str, Any]]:
         extra = req.get("@extra")
@@ -43,6 +53,11 @@ class Server(test_forums.Server):
                 return [{"@type": "error", "code": 404, "message": "Not Found", "@extra": extra}]
             case "getChatHistory":
                 return [{"@type": "messages", "total_count": 0, "messages": [], "@extra": extra}]
+            case "searchChatMessages" if req.get("sender_id") and req["chat_id"] == 5:
+                found = [_private(mid, text) for mid, text in PRIVATE_MESSAGES
+                         if req["query"].lower() in text.lower()]
+                return [{"@type": "foundChatMessages", "total_count": len(found),
+                         "messages": found, "next_from_message_id": 0, "@extra": extra}]
             case "searchChatMessages" if req.get("sender_id"):
                 query = req["query"].lower()
                 found = [MESSAGES[i] for i in sorted(MESSAGES, reverse=True)
@@ -391,6 +406,44 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         await self.settle()
         _screenshot(self.window, "person-messages-query")
         self.assertEqual(self.warnings, [], "QML warnings in the person messages panel")
+
+    async def test_person_messages_all_chats(self) -> None:
+        from PySide6.QtCore import QMetaObject
+
+        from tgclient.models.person_messages import Role
+
+        self.session.client._dispatch(new_chat(5, "Olena", 45))
+        self.open_chat(FORUM)
+        self.session.messages.openTopic(7)
+        await wait_until(lambda: (self.pump(), self.session.messages.rowCount())[1] > 0)
+        view = self.item("messageView")
+        QMetaObject.invokeMethod(view, "openSearch")
+        self.session.messages.setChatSearchSender("user:5", "Olena")
+        await self.settle()
+        button = self.item("allChatsButton")
+        self.assertTrue(button.isVisible())
+        _screenshot(self.window, "from-chat-all-button")
+        button.clicked.emit()
+        model = self.session.person_messages
+        await wait_until(lambda: (self.pump(), model.chatsSearched)[1] == 2 and not model.busy)
+        await self.settle()
+        self.assertTrue(model.allChats)
+        self.assertTrue(self.item("personCoverage").isVisible())
+        kinds = [model.data(model.index(r), Role.Kind) for r in range(model.rowCount())]
+        self.assertEqual(kinds[0], "header")
+        self.assertEqual(model.data(model.index(0), Role.ChatId), 5)  # newest chat first
+        _screenshot(self.window, "person-messages-all-chats")
+        QMetaObject.invokeMethod(view, "closeSearch")
+
+        self.session.search.setSender("user:5", "Olena")
+        self.session.search._run()
+        await wait_until(lambda: (self.pump(), self.session.search.chatsSearched)[1] == 2)
+        await self.settle()
+        self.assertTrue(self.item("globalCoverage").isVisible())
+        _screenshot(self.window, "from-global-all-chats")
+        self.session.search.setSender("", "")
+        await self.settle(0.1)
+        self.assertEqual(self.warnings, [], "QML warnings with all common chats")
 
     async def forums_loaded(self) -> None:
         await wait_until(lambda: (self.pump(), self.session.topics.rowCount())[1] == 2)

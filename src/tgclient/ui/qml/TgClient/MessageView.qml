@@ -20,6 +20,14 @@ Item {
         root.personMessagesOpen = true
     }
 
+    // The same, in every chat in common with them, already filtered by `query`.
+    function showPersonMessagesEverywhere(chatId, senderKey, name, query) {
+        personMessages.open(chatId, senderKey, name)
+        personMessages.allChats = true
+        personMessages.query = query
+        root.personMessagesOpen = true
+    }
+
     function showProfile(chatId, userId) {
         profile.open(chatId, userId)
         root.profileOpen = true
@@ -48,7 +56,8 @@ Item {
                 root.loadDraft(composerModel.draftText, composerModel.draftReplyTo)
                 root.summaryOpen = false
                 root.profileOpen = false
-                root.personMessagesOpen = false
+                if (!personMessages.allChats)  // its results lead to other chats
+                    root.personMessagesOpen = false
                 composer.focusInput()
             }
         }
@@ -358,6 +367,7 @@ Item {
                     id: chatSearchBox
                     objectName: "chatSearchBox"
                     Layout.fillWidth: true
+                    Layout.minimumWidth: 120
                     placeholder: messages.chatSearchSenderName !== ""
                                  ? qsTr("Search their messages")
                                  : qsTr("Search in this chat (from:@name for one person)")
@@ -368,6 +378,15 @@ Item {
                                     ? messages.setChatSearchSender("", "") : root.closeSearch()
                     onSubmitted: backwards => backwards ? messages.searchNewer()
                                                         : messages.searchOlder()
+                }
+                // From: a person — the same search over every chat in common, in the side panel
+                PillButton {
+                    objectName: "allChatsButton"
+                    visible: messages.chatSearchSender.startsWith("user:")
+                    text: qsTr("In all common chats")
+                    onClicked: root.showPersonMessagesEverywhere(
+                                   messages.chatId, messages.chatSearchSender,
+                                   messages.chatSearchSenderName, chatSearchBox.text)
                 }
                 Timer {
                     id: chatSearchTimer

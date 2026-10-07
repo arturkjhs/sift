@@ -1,6 +1,9 @@
 """Qt model of one sender's messages ("Messages from <name>"): in the open chat, newest first,
-paged as the list scrolls; with a query, only matches (highlighted). Exposed to QML as
-`personMessages`. Rows: {kind: "message", chatId, messageId, chatTitle, topic, time, text}."""
+paged as the list scrolls; with a query, only matches (highlighted). With "In all common
+chats" (people only): the groups in common and the private chat, each with its first page,
+grouped under a header per chat (newest chat first), more per chat on request. Exposed to
+QML as `personMessages`.
+Rows: {kind: "message" | "header", chatId, messageId, chatTitle, topic, time, text, more}."""
 
 from __future__ import annotations
 
@@ -21,7 +24,7 @@ from PySide6.QtCore import (
     Slot,
 )
 
-from ..services.person_search import PersonSearch
+from ..services.person_search import ChatResults, PersonSearch
 from ..services.summary import sender_object
 from ..store.chats import ChatStore
 from ..store.forums import ForumStore, message_topic_id
@@ -64,6 +67,9 @@ class PersonMessagesModel(QAbstractListModel):
         self._query = ""
         self._rows: list[dict[str, Any]] = []
         self._next_from = 0
+        self._all_chats = False  # "In all common chats"
+        self._groups: dict[int, ChatResults] = {}
+        self._chats_total = 0  # common chats being searched
         self._busy = False
         self._generation = 0
         self._color = "#553FB295"
@@ -79,6 +85,7 @@ class PersonMessagesModel(QAbstractListModel):
             return
         self._chat_id, self._sender, self._name = int(chat_id or 0), sender, name
         self._query = ""
+        self._all_chats = self._all_chats and sender.startswith("user:")
         self._restart()
 
     @Property(str, notify=changed)
@@ -133,8 +140,44 @@ class PersonMessagesModel(QAbstractListModel):
 
     @Slot()
     def loadMore(self) -> None:
+        if self._all_chats:
+            return  # per chat: loadMoreIn()
         if self._next_from and not self._busy and self._sender:
             self._spawn(self._load(self._generation, self._next_from))
+
+    @Property(bool, notify=changed)
+    def canSearchAllChats(self) -> bool:
+        return self._sender.startswith("user:")
+
+    def _get_all(self) -> bool:
+        return self._all_chats
+
+    def _set_all(self, value: bool) -> None:
+        value = bool(value) and self.canSearchAllChats
+        if value != self._all_chats:
+            self._all_chats = value
+            self._restart()
+
+    allChats = Property(bool, _get_all, _set_all, notify=changed)
+
+    @Property(int, notify=changed)
+    def chatsSearched(self) -> int:
+        """Common chats searched so far ("Searched 12 chats")."""
+        return len(self._groups) if self._all_chats else 0
+
+    @Property(int, notify=changed)
+    def chatsTotal(self) -> int:
+        return self._chats_total if self._all_chats else 0
+
+    def scope(self) -> tuple[list[int], int]:
+        """The chats searched now (for the AI check) and the open one."""
+        return (sorted(self._groups) if self._all_chats else [self._chat_id]), self._chat_id
+
+    @Slot("QVariant")
+    def loadMoreIn(self, chat_id: Any) -> None:
+        group = self._groups.get(int(chat_id or 0))
+        if group is not None and group.next_from:
+            self._spawn(self._more_in(self._generation, group))
 
     # --- QAbstractListModel -----------------------------------------------------------------
 
@@ -163,15 +206,66 @@ class PersonMessagesModel(QAbstractListModel):
         self._restart()
 
     def _restart(self) -> None:
+        """A new query or scope: the old searches stop."""
         self._generation += 1
         for task in list(self._tasks):
             task.cancel()
         self.beginResetModel()
-        self._rows, self._next_from = [], 0
+        self._rows, self._next_from, self._groups, self._chats_total = [], 0, {}, 0
         self.endResetModel()
         self.changed.emit()
-        if self._sender and self._chat_id:
+        if self._sender and self._all_chats:
+            self._spawn(self._load_common(self._generation))
+        elif self._sender and self._chat_id:
             self._spawn(self._load(self._generation, 0))
+
+    async def _load_common(self, generation: int) -> None:
+        self._set_busy(True)
+        try:
+            user_id = int(self._sender.split(":", 1)[1])
+            chat_ids = await self._search.common_chats(user_id)
+            if generation != self._generation:
+                return
+            self._chats_total = len(chat_ids)
+            self.changed.emit()
+
+            def arrived(result: ChatResults) -> None:
+                if generation == self._generation:
+                    self._groups[result.chat_id] = result
+                    self._rebuild()
+
+            await self._search.in_chats(chat_ids, self._sender, self._query.strip(),
+                                        on_chat=arrived)
+        finally:
+            if generation == self._generation:
+                self._set_busy(False)
+
+    async def _more_in(self, generation: int, group: ChatResults) -> None:
+        messages, next_from = await self._search.page(group.chat_id, self._sender,
+                                                      self._query.strip(), group.next_from)
+        if generation != self._generation:
+            return
+        known = {m["id"] for m in group.messages}
+        group.messages.extend(m for m in messages if m["id"] not in known)
+        group.next_from = next_from
+        self._rebuild()
+
+    def _rebuild(self) -> None:
+        """Chats with results, newest message first; a header, then that chat's messages."""
+        groups = sorted((g for g in self._groups.values() if g.messages),
+                        key=lambda g: -max(m.get("date", 0) for m in g.messages))
+        rows: list[dict[str, Any]] = []
+        for group in groups:
+            chat = self._chats.chats.get(group.chat_id)
+            rows.append({"kind": "header", "chatId": group.chat_id, "messageId": 0,
+                         "chatTitle": chat.title if chat else "", "topic": "", "time": "",
+                         "text": "", "media": "", "more": bool(group.next_from)})
+            rows.extend(self.row(m) for m in sorted(group.messages,
+                                                    key=lambda m: -m.get("date", 0)))
+        self.beginResetModel()
+        self._rows = rows
+        self.endResetModel()
+        self.changed.emit()
 
     async def _load(self, generation: int, from_id: int) -> None:
         self._set_busy(True)

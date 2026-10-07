@@ -489,5 +489,9 @@
 "Any sender": "Любой отправитель",
 "Name or @username": "Имя или @username",
 "Search in this chat (from:@name for one person)": "Поиск в чате (from:@имя — от одного человека)",
-"Only one person's messages: from:@username": "Сообщения одного человека: from:@username"
+"Only one person's messages: from:@username": "Сообщения одного человека: from:@username",
+"In all common chats": "Во всех общих чатах",
+"Chats searched: %1": "Просмотрено чатов: %1",
+"Chats searched: %1 of %2": "Просмотрено чатов: %1 из %2",
+"More": "Ещё"
 }

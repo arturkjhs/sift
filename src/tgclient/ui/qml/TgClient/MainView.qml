@@ -137,7 +137,18 @@ SplitView {
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSmall
                 }
-                Item { Layout.fillWidth: true; visible: search.senderName !== "" }
+                Text {
+                    objectName: "globalCoverage"
+                    Layout.fillWidth: true
+                    visible: search.senderName !== ""
+                    // the local index covers every chat; this counts the server searches
+                    text: search.chatsSearched > 0
+                          ? qsTr("Chats searched: %1").arg(search.chatsSearched) : ""
+                    horizontalAlignment: Text.AlignRight
+                    elide: Text.ElideRight
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSmall
+                }
             }
 
             FolderTabs {

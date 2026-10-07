@@ -489,5 +489,9 @@
 "Any sender": "Kdokoli",
 "Name or @username": "Jméno nebo @username",
 "Search in this chat (from:@name for one person)": "Hledat v chatu (from:@jméno — od jednoho člověka)",
-"Only one person's messages: from:@username": "Zprávy jednoho člověka: from:@username"
+"Only one person's messages: from:@username": "Zprávy jednoho člověka: from:@username",
+"In all common chats": "Ve všech společných chatech",
+"Chats searched: %1": "Prohledáno chatů: %1",
+"Chats searched: %1 of %2": "Prohledáno chatů: %1 z %2",
+"More": "Další"
 }

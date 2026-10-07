@@ -199,7 +199,7 @@ class Session:
             search_index, embedder, self.ai_service,
         )
         self.search = SearchModel(self.search_service, self.chats, client=self.client,
-                                  users=self.users)
+                                  users=self.users, person_search=self.person_search)
         self.sender_picker = SenderPicker(self.client, self.chats, self.users)
         self.ai_service.searcher = lambda query, chat_id: self.search_service.search(
             query, chat_id, limit=30)
