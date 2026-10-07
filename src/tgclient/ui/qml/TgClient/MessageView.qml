@@ -243,6 +243,9 @@ Item {
                         composer.focusInput()
                     }
                     flashed: messageId === root.highlightId
+                    selecting: messages.selectionCount > 0
+                    onSelectToggled: (id, range) => range ? messages.selectRange(id)
+                                                          : messages.toggleSelected(id)
                     onJumpRequested: id => root.showMessage(id)
                     onReactionToggled: (id, key) => messages.toggleReaction(id, key)
                     onMenuRequested: id => {
@@ -317,10 +320,70 @@ Item {
             }
         }
 
+        // Instead of the composer while messages are selected.
+        Rectangle {
+            id: selectionBar
+            objectName: "selectionBar"
+            Layout.fillWidth: true
+            implicitHeight: 56
+            visible: messages.selectionCount > 0
+            color: Theme.sidebar
+
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Theme.separator
+            }
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+                spacing: 8
+
+                IconButton {
+                    iconName: "close"
+                    glyphSize: 12
+                    Accessible.name: qsTr("Cancel selection")
+                    onClicked: messages.clearSelection()
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: messages.selectionCount === 1 ? qsTr("1 message selected")
+                          : qsTr("%1 messages selected").arg(messages.selectionCount)
+                    color: Theme.text
+                    font.pixelSize: Theme.fontBody
+                    font.weight: Font.DemiBold
+                }
+                PillButton {
+                    iconName: "copy"
+                    text: qsTr("Copy")
+                    onClicked: messages.copySelected()
+                }
+                PillButton {
+                    iconName: "forward"
+                    text: qsTr("Forward")
+                    onClicked: forwardDialog.pick(0)
+                }
+                PillButton {
+                    objectName: "deleteSelected"
+                    iconName: "trash"
+                    text: qsTr("Delete")
+                    danger: true
+                    onClicked: deleteDialog.ask(0, messages.selectionCanDeleteForAll)
+                }
+            }
+        }
+
+        Shortcut {
+            sequence: "Esc"
+            enabled: messages.selectionCount > 0
+            onActivated: messages.clearSelection()
+        }
+
         Composer {
             id: composer
             Layout.fillWidth: true
-            visible: messages.canWrite
+            visible: messages.canWrite && !selectionBar.visible
             replyToId: root.replyToId
             onCancelReply: root.replyToId = 0
             onSent: {
@@ -771,6 +834,13 @@ Item {
             onTriggered: forwardDialog.pick(messageMenu.messageId)
         }
         AppMenuItem {
+            objectName: "selectItem"
+            text: qsTr("Select")
+            iconName: "check"
+            hint: Qt.platform.os === "osx" ? qsTr("\u2318-click") : qsTr("Ctrl+click")
+            onTriggered: messages.toggleSelected(messageMenu.messageId)
+        }
+        AppMenuItem {
             text: messageMenu.isVoice ? qsTr("Copy transcript") : qsTr("Copy text")
             iconName: "copy"
             visible: messageMenu.isVoice ? messageMenu.transcribed
@@ -883,7 +953,10 @@ Item {
     ForwardDialog {
         id: forwardDialog
         onChatPicked: chatId => {
-            messages.forward(forwardDialog.messageId, chatId)
+            if (forwardDialog.messageId === 0)  // the selection
+                messages.forwardSelected(chatId)
+            else
+                messages.forward(forwardDialog.messageId, chatId)
             root.openChatRequested(chatId, 0)
         }
     }
@@ -918,7 +991,9 @@ Item {
 
             Text {
                 Layout.fillWidth: true
-                text: qsTr("Delete this message?")
+                text: deleteDialog.messageId !== 0 || messages.selectionCount === 1
+                      ? qsTr("Delete this message?")
+                      : qsTr("Delete %1 messages?").arg(messages.selectionCount)
                 color: Theme.text
                 font.pixelSize: 15
                 font.weight: Font.DemiBold
@@ -952,8 +1027,11 @@ Item {
                     filled: true
                     danger: true
                     onClicked: {
-                        messages.deleteMessage(deleteDialog.messageId,
-                                               deleteDialog.canRevoke && revokeSwitch.checked)
+                        const revoke = deleteDialog.canRevoke && revokeSwitch.checked
+                        if (deleteDialog.messageId === 0)  // the selection
+                            messages.deleteSelected(revoke)
+                        else
+                            messages.deleteMessage(deleteDialog.messageId, revoke)
                         deleteDialog.close()
                     }
                 }

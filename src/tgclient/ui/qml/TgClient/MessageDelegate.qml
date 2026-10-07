@@ -49,9 +49,11 @@ Item {
     required property var albumItems
     required property string stickerFormat
     required property string playbackPath
+    required property bool selected
 
     property bool isGroupChat: false
     property bool flashed: false   // just jumped to: briefly tinted
+    property bool selecting: false // some messages are selected: a click toggles this one
 
     signal replyRequested(var messageId)
     signal jumpRequested(var messageId)
@@ -59,6 +61,7 @@ Item {
     signal linkActivated(string link)
     signal senderClicked(string senderKey, string senderName, var messageId)
     signal reactionToggled(var messageId, string key)
+    signal selectToggled(var messageId, bool range)   // range: Shift-click
 
     readonly property real sidePadding: 16
     readonly property real avatarSpace: isGroupChat && !isOutgoing ? 40 : 0
@@ -174,6 +177,16 @@ Item {
             height: visible ? bubble.height : 0
             visible: !root.isService
 
+            Rectangle {  // in the multi-selection
+                objectName: "selectionTint"
+                anchors.fill: parent
+                anchors.topMargin: -2
+                anchors.bottomMargin: -2
+                visible: root.selected
+                color: Theme.selection
+                opacity: 0.6
+            }
+
             Avatar {
                 visible: root.showAvatar
                 x: root.sidePadding
@@ -222,7 +235,19 @@ Item {
                 }
                 TapHandler {
                     acceptedButtons: Qt.LeftButton
-                    onDoubleTapped: root.replyRequested(root.messageId)
+                    acceptedModifiers: Qt.NoModifier
+                    onTapped: if (root.selecting) root.selectToggled(root.messageId, false)
+                    onDoubleTapped: if (!root.selecting) root.replyRequested(root.messageId)
+                }
+                TapHandler {  // Cmd-click (Ctrl elsewhere): add to / remove from the selection
+                    acceptedButtons: Qt.LeftButton
+                    acceptedModifiers: Qt.ControlModifier
+                    onTapped: root.selectToggled(root.messageId, false)
+                }
+                TapHandler {
+                    acceptedButtons: Qt.LeftButton
+                    acceptedModifiers: Qt.ShiftModifier
+                    onTapped: root.selectToggled(root.messageId, true)
                 }
 
                 Column {

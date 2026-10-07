@@ -118,6 +118,7 @@ class Role(IntEnum):
     AlbumItems = auto()  # on that newest message: [{messageId, kind, source, x, y, w, h, ...}]
     StickerFormat = auto()  # webp | tgs | webm
     PlaybackPath = auto()  # local file to play inline (animated sticker, GIF), "" until ready
+    Selected = auto()  # in the multi-selection (Cmd/Ctrl/Shift-click)
 
 
 # Roles that depend on file state (refreshed when a file of the message changes).
@@ -160,6 +161,9 @@ class _Adapter:
         self._model._html_cache.pop(message_id, None)
         self._model.endRemoveRows()
         self._model._refresh_albums(row - 1, row)
+        if message_id in self._model._selected:
+            self._model._selected.discard(message_id)
+            self._model.selectionChanged.emit()
 
     def history_changed(self, row: int) -> None:
         if self._current():
@@ -191,6 +195,7 @@ class MessageListModel(QAbstractListModel):
     linkResolved = Signal("QVariant", "QVariant")  # chat id, message id (0: just the chat)
     latestChanged = Signal()
     countersChanged = Signal()
+    selectionChanged = Signal()
 
     def __init__(
         self, client: TdClient, chats: ChatStore, users: UserStore,
@@ -210,6 +215,8 @@ class MessageListModel(QAbstractListModel):
         self._unread_after = 0  # last read incoming message id when the chat was opened
         self._first_unread = 0  # message showing the "Unread messages" separator
         self._at_latest = True
+        self._selected: set[int] = set()
+        self._select_anchor = 0  # last message toggled: Shift-click selects from it
         self._files: FileManager = chats.files
         self._files.subscribe(self._on_file)
         mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
@@ -257,6 +264,115 @@ class MessageListModel(QAbstractListModel):
         """The newest message is loaded (false after opening on an old unread message or
         jumping far back: the view then loads newer pages and "down" reloads the newest)."""
         return self._at_latest
+
+    @Property(int, notify=selectionChanged)
+    def selectionCount(self) -> int:
+        return len(self._selected)
+
+    @Property(bool, notify=selectionChanged)
+    def selectionCanDeleteForAll(self) -> bool:
+        """Every selected message is own (or the chat is private): "delete for everyone"."""
+        history = self._history
+        chat = self._chat()
+        if history is None or not self._selected:
+            return False
+        if chat is not None and chat.type == "private" and chat.peer_id != self._users.my_id:
+            return True
+        return all((history.get(i) or {}).get("is_outgoing") for i in self._selected)
+
+    @Slot("QVariant")
+    def toggleSelected(self, message_id: Any) -> None:
+        message_id = int(message_id or 0)
+        history = self._history
+        message = history.get(message_id) if history else None
+        if message is None or is_service(message.get("content", {})):
+            return
+        row = history.row_of(message_id)
+        album = self._album_range(row)
+        ids = [m["id"] for m in history.messages[album[0]:album[1] + 1]] if album else [message_id]
+        if message_id in self._selected or any(i in self._selected for i in ids):
+            self._selected.difference_update(ids)
+        else:
+            self._selected.update(ids)
+        self._select_anchor = message_id
+        self._selection_rows(ids)
+
+    @Slot("QVariant")
+    def selectRange(self, message_id: Any) -> None:
+        """Shift-click: everything between the last toggled message and this one."""
+        history = self._history
+        message_id = int(message_id or 0)
+        if history is None or history.row_of(message_id) < 0:
+            return
+        anchor = history.row_of(self._select_anchor) if self._select_anchor else -1
+        if anchor < 0:
+            self.toggleSelected(message_id)
+            return
+        lo, hi = sorted((anchor, history.row_of(message_id)))
+        ids = [m["id"] for m in history.messages[lo:hi + 1]
+               if not is_service(m.get("content", {}))]
+        self._selected.update(ids)
+        self._selection_rows(ids)
+
+    @Slot()
+    def clearSelection(self) -> None:
+        ids = list(self._selected)
+        self._selected.clear()
+        self._select_anchor = 0
+        self._selection_rows(ids)
+
+    @Slot(bool)
+    def deleteSelected(self, revoke: bool) -> None:
+        history = self._history
+        if history is None or not self._selected:
+            return
+        self._spawn(self._request({
+            "@type": "deleteMessages", "chat_id": history.chat_id,
+            "message_ids": sorted(self._selected), "revoke": bool(revoke),
+        }, "Deleting"))
+        self.clearSelection()
+
+    @Slot("QVariant")
+    def forwardSelected(self, to_chat_id: Any) -> None:
+        history = self._history
+        if history is None or not self._selected or not to_chat_id:
+            return
+        self._spawn(self._request({
+            "@type": "forwardMessages", "chat_id": int(to_chat_id), "topic_id": None,
+            "from_chat_id": history.chat_id, "message_ids": sorted(self._selected),
+            "options": None, "send_copy": False, "remove_caption": False,
+        }, "Forwarding"))
+        self.clearSelection()
+
+    @Slot()
+    def copySelected(self) -> None:
+        """Texts of the selected messages, oldest first, with sender and time like other
+        clients ("Olena, [12:30]\ntext")."""
+        history = self._history
+        if history is None or not self._selected:
+            return
+        parts = []
+        for message_id in sorted(self._selected):
+            message = history.get(message_id)
+            if message is None:
+                continue
+            text = (message_body(message.get("content", {})) or {}).get("text", "") or (
+                content_preview(message.get("content", {})))
+            parts.append(f"{self._sender_name(message)}, [{clock(message.get('date', 0))}]\n"
+                         f"{text}")
+        QGuiApplication.clipboard().setText("\n\n".join(parts))
+        self.clearSelection()
+
+    def _selection_rows(self, ids: list[int]) -> None:
+        history = self._history
+        for message_id in ids:
+            row = history.row_of(message_id) if history else -1
+            if row >= 0:
+                album = self._album_range(row)
+                for each in range(album[0], album[1] + 1) if album else (row,):
+                    index = self.index(each)
+                    self.dataChanged.emit(index, index, [Role.Selected])
+        self.selectionChanged.emit()
 
     @Property(int, notify=countersChanged)
     def unreadCount(self) -> int:
@@ -339,10 +455,13 @@ class MessageListModel(QAbstractListModel):
         self._unread_after = (chat.last_read_inbox_message_id
                               if chat and chat.unread_count > 0 else 0)
         self._first_unread = 0
+        self._selected = set()
+        self._select_anchor = 0
         self.endResetModel()
         self.chatChanged.emit()
         self.statusChanged.emit()
         self.countersChanged.emit()
+        self.selectionChanged.emit()
         self._sync_latest()
         self._spawn(self._client.send({"@type": "openChat", "chat_id": chat_id}))
         self._spawn(self._run_load(history, self._load_initial(history)))
@@ -800,6 +919,10 @@ class MessageListModel(QAbstractListModel):
             case Role.AlbumHidden:
                 album = self._album_range(row)
                 return bool(album) and row != album[0]
+            case Role.Selected:
+                album = self._album_range(row)
+                members = history.messages[album[0]:album[1] + 1] if album else [message]
+                return any(m["id"] in self._selected for m in members)
             case Role.DayLabel:
                 older = self._neighbor(self._older_row(row))
                 if older is None:

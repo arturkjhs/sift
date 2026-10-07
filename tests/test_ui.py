@@ -610,6 +610,20 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         pump()
         self.assertEqual(composer_root.property("editingId"), 0)
 
+        # Multi-selection: the bar replaces the composer, Esc clears it
+        session.messages.toggleSelected(2)
+        session.messages.selectRange(3)
+        QMetaObject.invokeMethod(message_list, "positionViewAtIndex",
+                                 Q_ARG(int, session.messages.rowOf(2)), Q_ARG(int, 1))
+        await settle(0.1)
+        selection_bar = find_item(window.contentItem(), "selectionBar")
+        self.assertTrue(selection_bar.isVisible())
+        self.assertFalse(composer_root.isVisible())
+        _screenshot(window, "selection")
+        session.messages.clearSelection()
+        pump()
+        self.assertFalse(selection_bar.isVisible())
+
         # Delete and forward dialogs
         delete_dialog = window.findChild(QObject, "deleteDialog")
         QMetaObject.invokeMethod(delete_dialog, "ask", Q_ARG("QVariant", 3),

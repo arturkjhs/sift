@@ -218,6 +218,50 @@ class MessageActionsTest(ActionCase):
         self.assertEqual(self.model.chatStatus, "")  # member count not known yet
 
 
+class SelectionTest(ActionCase):
+    async def test_select_delete_forward_copy(self) -> None:
+        await self.open_loaded()
+        changes: list[int] = []
+        self.model.selectionChanged.connect(lambda: changes.append(self.model.selectionCount))
+        self.model.toggleSelected(2)
+        self.model.selectRange(5)  # Shift-click: 2..5
+        self.assertEqual(self.model.selectionCount, 4)
+        self.assertTrue(self.role(self.model.rowOf(3), self.Role.Selected))
+        self.assertFalse(self.role(self.model.rowOf(6), self.Role.Selected))
+        self.model.toggleSelected(3)
+        self.assertEqual(self.model.selectionCount, 3)
+        self.assertFalse(self.model.selectionCanDeleteForAll)  # not own messages
+
+        from PySide6.QtGui import QGuiApplication
+
+        self.model.copySelected()
+        copied = QGuiApplication.clipboard().text()
+        self.assertTrue(copied.startswith("Olena K, ["), copied)
+        self.assertIn("\nm2\n\n", copied)
+        self.assertEqual(self.model.selectionCount, 0)
+
+        for message_id in (6, 4):
+            self.model.toggleSelected(message_id)
+        self.model.forwardSelected(77)
+        await wait_until(lambda: bool(self.sent("forwardMessages")))
+        self.assertEqual(self.sent("forwardMessages")[0]["message_ids"], [4, 6])
+        self.assertEqual(self.model.selectionCount, 0)
+
+        self.model.toggleSelected(1)
+        self.model.toggleSelected(2)
+        self.model.deleteSelected(True)
+        await wait_until(lambda: bool(self.sent("deleteMessages")))
+        request = self.sent("deleteMessages")[0]
+        self.assertEqual((request["message_ids"], request["revoke"]), ([1, 2], True))
+        self.assertEqual(changes[-1], 0)
+
+        # a deleted message leaves the selection; reopening clears it
+        self.model.toggleSelected(5)
+        await self.push({"@type": "updateDeleteMessages", "chat_id": CHAT, "message_ids": [5],
+                         "is_permanent": True, "from_cache": False})
+        self.assertEqual(self.model.selectionCount, 0)
+
+
 class PrivateStatusTest(ActionCase):
     async def test_private_chat_shows_last_seen(self) -> None:
         await self.push(new_chat(5, "Olena", 2, "chatTypePrivate"))
