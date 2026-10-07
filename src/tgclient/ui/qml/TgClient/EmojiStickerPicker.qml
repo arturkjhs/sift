@@ -71,9 +71,11 @@ Popup {
         implicitWidth: 34
         implicitHeight: 34
         hoverEnabled: true
-        ToolTip.visible: hovered && text !== ""
-        ToolTip.text: text
-        ToolTip.delay: 600
+        AppToolTip {
+            visible: parent.hovered && parent.text !== ""
+            text: parent.text
+            delay: 600
+        }
 
         background: Rectangle {
             radius: 8
@@ -213,9 +215,11 @@ Popup {
                         height: emojiGrid.cellHeight
                         hoverEnabled: true
                         Accessible.name: name
-                        ToolTip.visible: hovered
-                        ToolTip.text: name
-                        ToolTip.delay: 900
+                        AppToolTip {
+                            visible: parent.hovered
+                            text: parent.name
+                            delay: 900
+                        }
 
                         background: Rectangle {
                             radius: 8

@@ -134,9 +134,11 @@ Item {
         iconName: "folder"
         glyphSize: 15
         Accessible.name: qsTr("New folder")
-        ToolTip.visible: hovered
-        ToolTip.delay: 600
-        ToolTip.text: Accessible.name
+        AppToolTip {
+            visible: parent.hovered
+            delay: 600
+            text: parent.Accessible.name
+        }
         onClicked: root.editRequested("")
     }
 }

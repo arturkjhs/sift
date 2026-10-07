@@ -306,9 +306,11 @@ Popup {
         implicitHeight: size
         hoverEnabled: true
         opacity: enabled ? 1 : 0.4
-        ToolTip.visible: hovered && Accessible.name !== ""
-        ToolTip.text: Accessible.name
-        ToolTip.delay: 600
+        AppToolTip {
+            visible: parent.hovered && parent.Accessible.name !== ""
+            text: parent.Accessible.name
+            delay: 600
+        }
         background: Rectangle {
             radius: width / 2
             color: button.hovered ? "#33FFFFFF" : "#1AFFFFFF"

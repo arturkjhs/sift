@@ -780,7 +780,14 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(latest_jump.isVisible() and mention_jump.isVisible())
         self.assertEqual(latest_jump.property("count"), 260)
         self.assertEqual(mention_jump.property("count"), 3)
+        hint = next(c for c in mention_jump.children()
+                    if c.metaObject().className().startswith("AppToolTip"))
+        hint.setProperty("delay", 0)  # shown at once, not after hovering 600 ms
+        QMetaObject.invokeMethod(hint, "open")
+        await settle()
+        self.assertTrue(hint.property("opened"))
         _screenshot(window, "jump-buttons")
+        QMetaObject.invokeMethod(hint, "close")
         QMetaObject.invokeMethod(latest_jump, "clicked")
         await wait_until(lambda: (pump(), session.messages.atLatest)[1]
                          and session.messages.rowOf(300) >= 0)

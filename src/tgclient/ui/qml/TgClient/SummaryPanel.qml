@@ -163,9 +163,11 @@ Rectangle {
                 }
 
                 // Citation chips: who wrote it and when.
-                ToolTip.text: hoveredLink !== "" ? ai.linkTooltip(hoveredLink) : ""
-                ToolTip.visible: ToolTip.text !== ""
-                ToolTip.delay: 300
+                AppToolTip {
+                    text: parent.hoveredLink !== "" ? ai.linkTooltip(parent.hoveredLink) : ""
+                    visible: text !== ""
+                    delay: 300
+                }
 
                 HoverHandler {
                     cursorShape: summaryText.linkAt(point.position.x, point.position.y) !== ""

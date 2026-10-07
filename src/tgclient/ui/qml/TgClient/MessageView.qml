@@ -104,6 +104,7 @@ Item {
         function onViewerRequested(messageId) { viewer.open(messageId) }
         // A t.me link to a message: jump to it here, or open the other chat.
         function onSearchRequested(query) { root.searchRequested(query) }
+        function onViewCheckNeeded() { viewTimer.restart() }  // a new reaction on screen
         function onBotAnswer(text, alert) {
             if (alert)
                 botAlert.ask(text, "", qsTr("OK"), "", null)
@@ -258,9 +259,11 @@ Item {
                     iconName: "clock"
                     glyphSize: 17
                     Accessible.name: qsTr("Scheduled messages")
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 600
-                    ToolTip.text: Accessible.name
+                    AppToolTip {
+                        visible: parent.hovered
+                        delay: 600
+                        text: parent.Accessible.name
+                    }
                     onClicked: scheduledList.show()
                 }
 
@@ -271,10 +274,11 @@ Item {
                     iconName: "search"
                     glyphSize: 17
                     Accessible.name: qsTr("Search in this chat")
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 600
-                    ToolTip.text: Qt.platform.os === "osx" ? qsTr("Search in this chat (\u2318F)")
-                                                          : qsTr("Search in this chat (Ctrl+F)")
+                    AppToolTip {
+                        visible: parent.hovered
+                        delay: 600
+                        text: Qt.platform.os === "osx" ? qsTr("Search in this chat (\u2318F)") : qsTr("Search in this chat (Ctrl+F)")
+                    }
                     onClicked: chatSearch.visible ? root.closeSearch() : root.openSearch()
                 }
 
@@ -293,9 +297,11 @@ Item {
                     visible: ai.available
                     filled: ai.enabled
                     text: ai.enabled ? qsTr("AI on") : qsTr("AI off")
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 600
-                    ToolTip.text: qsTr("Summaries and voice transcription for this chat")
+                    AppToolTip {
+                        visible: parent.hovered
+                        delay: 600
+                        text: qsTr("Summaries and voice transcription for this chat")
+                    }
                     onClicked: {
                         if (ai.enabled) {
                             ai.setEnabled(false)
@@ -1277,9 +1283,11 @@ Item {
                     height: 34
                     hoverEnabled: true
                     Accessible.name: qsTr("More reactions")
-                    ToolTip.visible: hovered
-                    ToolTip.delay: 600
-                    ToolTip.text: Accessible.name
+                    AppToolTip {
+                        visible: parent.hovered
+                        delay: 600
+                        text: parent.Accessible.name
+                    }
                     onClicked: messageMenu.openAllReactions()
                     background: Rectangle {
                         radius: height / 2

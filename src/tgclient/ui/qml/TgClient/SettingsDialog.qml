@@ -1211,10 +1211,11 @@ Popup {
                     }
                     PillButton {
                         text: qsTr("Delete AI data")
-                        ToolTip.visible: hovered
-                        ToolTip.delay: 600
-                        ToolTip.text: qsTr("Turn AI off and delete this chat's transcripts, "
-                                           + "translations and summaries")
+                        AppToolTip {
+                            visible: parent.hovered
+                            delay: 600
+                            text: qsTr("Turn AI off and delete this chat's transcripts, " + "translations and summaries")
+                        }
                         onClicked: ai.forgetChat(modelData.chatId)
                     }
                 }

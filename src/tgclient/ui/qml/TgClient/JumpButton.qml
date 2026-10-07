@@ -15,9 +15,14 @@ AbstractButton {
     height: 38
     hoverEnabled: true
     Accessible.name: accessibleName
-    ToolTip.visible: hovered
-    ToolTip.delay: 600
-    ToolTip.text: accessibleName
+    AppToolTip {
+        // to the left: above, it would cover the counter of the button over this one
+        x: -implicitWidth - 8
+        y: (parent.height - implicitHeight) / 2
+        visible: parent.hovered
+        delay: 600
+        text: accessibleName
+    }
 
     TapHandler {
         acceptedButtons: Qt.RightButton

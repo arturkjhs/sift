@@ -12,9 +12,11 @@ AbstractButton {
     hoverEnabled: true
     opacity: enabled ? 1 : 0.4
 
-    ToolTip.visible: hovered && Accessible.name !== ""
-    ToolTip.text: Accessible.name
-    ToolTip.delay: 600
+    AppToolTip {
+        visible: parent.hovered && parent.Accessible.name !== ""
+        text: parent.Accessible.name
+        delay: 600
+    }
 
     background: Rectangle {
         radius: 6

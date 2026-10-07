@@ -26,9 +26,11 @@ AbstractButton {
     implicitHeight: 34
     hoverEnabled: true
     Accessible.name: qsTr("Accounts")
-    ToolTip.visible: hovered
-    ToolTip.delay: 600
-    ToolTip.text: root.current.name
+    AppToolTip {
+        visible: parent.hovered
+        delay: 600
+        text: root.current.name
+    }
     onClicked: menu.opened ? menu.close() : menu.open()
 
     contentItem: Item {

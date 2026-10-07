@@ -87,22 +87,28 @@ Popup {
                     IconButton {
                         iconName: "forward"
                         Accessible.name: qsTr("Send now")
-                        ToolTip.visible: hovered
-                        ToolTip.text: Accessible.name
+                        AppToolTip {
+                            visible: parent.hovered
+                            text: parent.Accessible.name
+                        }
                         onClicked: messages.sendScheduledNow(row.modelData.messageId)
                     }
                     IconButton {
                         iconName: "clock"
                         Accessible.name: qsTr("Reschedule")
-                        ToolTip.visible: hovered
-                        ToolTip.text: Accessible.name
+                        AppToolTip {
+                            visible: parent.hovered
+                            text: parent.Accessible.name
+                        }
                         onClicked: root.rescheduleRequested(row.modelData.messageId)
                     }
                     IconButton {
                         iconName: "trash"
                         Accessible.name: qsTr("Delete")
-                        ToolTip.visible: hovered
-                        ToolTip.text: Accessible.name
+                        AppToolTip {
+                            visible: parent.hovered
+                            text: parent.Accessible.name
+                        }
                         onClicked: messages.deleteScheduled(row.modelData.messageId)
                     }
                 }

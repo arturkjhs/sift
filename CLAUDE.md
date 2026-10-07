@@ -215,7 +215,10 @@ src/tgclient/
   «вниз» с `unreadCount`, «@» (`mentionCount`, `nextMention` — самое старое из
   `searchChatMessages` c `searchMessagesFilterUnreadMention`) и ♡ (`reactionCount`,
   `updateChatUnreadReactionCount`/`updateMessageUnreadReactions`); правый клик — «прочитать
-  все» (`readAllChatMentions`/`readAllChatReactions`).
+  все» (`readAllChatMentions`/`readAllChatReactions`). Реакции на свои сообщения читаются
+  `viewMessages` этих (исходящих) сообщений, пока у них есть `unread_reactions`
+  (`updateMessageUnreadReactions` → `ChatHistory`, сигнал `viewCheckNeeded` перезапускает
+  проверку видимого); входящие помечаются один раз (`_viewed`).
 - Черновики: `ComposerModel` — единственный, кто пишет `setChatDraftMessage` (через 1.5 с после
   ввода и при смене чата/выходе). Своё эхо из `updateChatDraftMessage` распознаётся по
   `_synced`; чужой черновик заменяет ввод, только если пользователь не печатал с последней
@@ -367,7 +370,9 @@ src/tgclient/
   `Text.MarkdownText` игнорирует `linkColor` → саммари рендерятся своим `store/markdown.py`.
   `Text.StyledText` не понимает CSS: цвет через `<font color>`.
 - Меню — только `AppMenu`/`AppMenuItem`/`AppMenuSeparator` (свои стили, иконки, тень без шейдеров),
-  не голые `Menu`/`MenuItem` Basic-стиля. Кнопки — `PillButton`/`IconButton`.
+  не голые `Menu`/`MenuItem` Basic-стиля. Кнопки — `PillButton`/`IconButton`. Подсказки —
+  только `AppToolTip { visible: parent.hovered; text: … }` дочерним объектом; attached
+  `ToolTip.text` Basic-стиля — серый квадрат, не использовать.
 - В тестах Qt-события идут только через `pump()`: анимации (появление попапов) докручивать
   циклом `settle()`, иначе на скриншоте попап прозрачный.
 - Фото скачиваются лениво: роль `avatarSource` при первом запросе вызывает `request_photo()`,

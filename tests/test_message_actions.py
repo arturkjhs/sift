@@ -262,6 +262,35 @@ class SelectionTest(ActionCase):
         self.assertEqual(self.model.selectionCount, 0)
 
 
+class UnreadReactionsTest(ActionCase):
+    async def test_viewing_own_message_reads_its_reactions(self) -> None:
+        await self.open_loaded()
+        await self.push({"@type": "updateNewMessage", "message": msg(10_000, "mine", out=True)})
+        checks: list[int] = []
+        self.model.viewCheckNeeded.connect(lambda: checks.append(1))
+        reaction = {"type": {"@type": "reactionTypeEmoji", "emoji": "🔥"},
+                    "sender_id": {"@type": "messageSenderUser", "user_id": 5}, "is_big": False}
+        await self.push({"@type": "updateMessageUnreadReactions", "chat_id": CHAT,
+                         "message_id": 10_000, "unread_reactions": [reaction],
+                         "unread_reaction_count": 1})
+        self.assertEqual(checks, [1])  # the view checks what is on screen
+        row = self.model.rowOf(10_000)
+        self.model.markViewed(row, row)
+        await wait_until(lambda: any(10_000 in r["message_ids"]
+                                     for r in self.sent("viewMessages")))
+        self.model.markViewed(row, row)  # still unread (TDLib hasn't answered): asked again
+        await wait_until(lambda: sum(10_000 in r["message_ids"]
+                                     for r in self.sent("viewMessages")) == 2)
+        await self.push({"@type": "updateMessageUnreadReactions", "chat_id": CHAT,
+                         "message_id": 10_000, "unread_reactions": [],
+                         "unread_reaction_count": 0})
+        before = len(self.sent("viewMessages"))
+        self.model.markViewed(row, row)
+        await self.push()
+        self.assertEqual(len(self.sent("viewMessages")), before)  # read: not sent again
+        self.assertEqual(self.chats.chats[CHAT].unread_reaction_count, 0)
+
+
 class ReactorsTest(ActionCase):
     async def test_tooltip_names_recent_then_full_list(self) -> None:
         def added(req: dict[str, Any]) -> list[dict[str, Any]] | None:

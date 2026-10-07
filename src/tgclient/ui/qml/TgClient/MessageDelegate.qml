@@ -731,9 +731,11 @@ Item {
                                     ? (messages.reactorsVersion,
                                        messages.reactorsText(root.messageId, modelData.key))
                                     : ""
-                                ToolTip.visible: pillHover.hovered && reactors !== ""
-                                ToolTip.delay: 400
-                                ToolTip.text: reactors
+                                AppToolTip {
+                                    visible: pillHover.hovered && parent.reactors !== ""
+                                    delay: 400
+                                    text: parent.reactors
+                                }
                                 TapHandler {
                                     onTapped: root.reactionToggled(root.messageId,
                                                                    pill.modelData.key)

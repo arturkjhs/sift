@@ -218,6 +218,7 @@ class MessageListModel(QAbstractListModel):
     chatSearchChanged = Signal()
     botAnswer = Signal(str, bool)  # a bot's answer to a button: text, as an alert
     replyKeyboardChanged = Signal()
+    viewCheckNeeded = Signal()  # e.g. a reaction to a message that may be on screen
     scheduledChanged = Signal()
     chatSearchJump = Signal("QVariant")  # a search result to show (QML jumps and flashes)
 
@@ -897,6 +898,7 @@ class MessageListModel(QAbstractListModel):
                               last_message_id=(lambda: 0) if thread_id
                               else lambda: self._last_message_id(chat_id, topic_id),
                               topic_id=topic_id, thread_id=thread_id)
+        history.on_unread_reaction = self.viewCheckNeeded.emit
         ref.append(history)
         self.beginResetModel()
         self._history = history
@@ -1172,13 +1174,17 @@ class MessageListModel(QAbstractListModel):
         if history is None or first < 0 or last < 0:
             return
         lo, hi = sorted((first, last))
-        ids = [
-            m["id"] for m in history.messages[lo : hi + 1]
-            if m["id"] not in self._viewed and not m.get("is_outgoing")
-        ]
-        if not ids:
+        shown = history.messages[lo : hi + 1]
+        # Incoming messages are read once; own messages with new reactions are viewed until
+        # TDLib clears their unread_reactions (that is what reads the reactions).
+        incoming = [m["id"] for m in shown
+                    if m["id"] not in self._viewed and not m.get("is_outgoing")]
+        reacted = [m["id"] for m in shown
+                   if m.get("is_outgoing") and m.get("unread_reactions")]
+        if not incoming and not reacted:
             return
-        self._viewed.update(ids)
+        self._viewed.update(incoming)
+        ids = incoming + [i for i in reacted if i not in incoming]
         self._spawn(self._client.send({
             "@type": "viewMessages", "chat_id": history.chat_id, "message_ids": ids,
             "source": None, "force_read": True,
