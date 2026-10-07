@@ -60,7 +60,7 @@
   `com.canonical.Unity.LauncherEntry`. Звук — настройкой. Без отправки текста уведомлений
   куда-либо кроме ОС.
   *Готово, когда:* пропущенных сообщений не бывает при свёрнутом окне; клик ведёт в чат.
-  → M7: `store/notifications.py`, `ui/notifications.py` (UserNotifications / D-Bus), бейдж `setBadgeNumber`. Не сделано: звук настройкой.
+  → M7: `store/notifications.py`, `ui/notifications.py` (UserNotifications / D-Bus), бейдж `setBadgeNumber`; звук — переключатель «Play a sound» (`notification_sound`).
 
 - [x] **Разделитель «Непрочитанные» и открытие на первом непрочитанном.**
   По `chat.last_read_inbox_message_id`: история грузится вокруг этого id

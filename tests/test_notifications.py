@@ -105,6 +105,17 @@ class NotifierTest(unittest.IsolatedAsyncioTestCase):
                          ("New message", ""))
         self.assertFalse(Prefs(self.prefs._path).get("notification_preview"))  # persisted
 
+    async def test_sound_setting_and_locked_privacy(self) -> None:
+        self.controller.setSound(False)
+        await self.push(group_update(1, 1, [notification(1, message(1, 1, "a"))]))
+        self.assertTrue(self.backend.shown[-1].silent)
+        self.assertFalse(Prefs(self.prefs._path).get("notification_sound"))
+        self.controller.setSound(True)
+        self.controller.notifier.private = lambda: True  # the app is locked
+        await self.push(group_update(2, 1, [notification(2, message(1, 2, "secret"))]))
+        self.assertEqual((self.backend.shown[-1].silent, self.backend.shown[-1].body),
+                         (False, "New message"))
+
     async def test_disabled_and_suppressed(self) -> None:
         self.controller.setEnabled(False)
         await self.push(group_update(1, 1, [notification(1, message(1, 1, "a"))]))

@@ -18,6 +18,8 @@ DEFAULTS: dict[str, Any] = {
     "theme": "system",
     "notifications": True,
     "notification_preview": True,
+    "notification_sound": True,  # off: every notification is silent
+    "auto_lock_minutes": 0,  # with a passcode: lock after this long without input (0: never)
     # AI: empty model names mean the defaults from config.py (or TGC_*_MODEL).
     "summary_model": "",
     "cheap_model": "",

@@ -149,6 +149,23 @@ Popup {
                     onToggled: notifications.setShowPreview(checked)
                 }
             }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 12
+                Text {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    text: qsTr("Play a sound")
+                    color: notifications.enabled ? Theme.text : Theme.textMuted
+                    font.pixelSize: Theme.fontBody
+                }
+                ToggleSwitch {
+                    objectName: "soundSwitch"
+                    enabled: notifications.enabled
+                    checked: notifications.sound
+                    onToggled: notifications.setSound(checked)
+                }
+            }
             PillButton {
                 text: qsTr("Send a test notification")
                 iconName: "bell"

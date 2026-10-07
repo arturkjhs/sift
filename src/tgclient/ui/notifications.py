@@ -83,6 +83,7 @@ class NotificationController(QObject):
         self.notifier = Notifier(client, chats, users, self, suppress=self._suppress)
         self.notifier.enabled = bool(prefs.get("notifications"))
         self.notifier.show_preview = bool(prefs.get("notification_preview"))
+        self._sound = bool(prefs.get("notification_sound"))
         self._badge = -1
         chats.subscribe(self._on_chats)
 
@@ -125,6 +126,16 @@ class NotificationController(QObject):
         self._prefs.set("notification_preview", value)
         self.settingsChanged.emit()
 
+    @Property(bool, notify=settingsChanged)
+    def sound(self) -> bool:
+        return self._sound
+
+    @Slot(bool)
+    def setSound(self, value: bool) -> None:
+        self._sound = value
+        self._prefs.set("notification_sound", value)
+        self.settingsChanged.emit()
+
     @Slot()
     def sendTest(self) -> None:
         self.show(Notice(key="test", chat_id=0, message_id=0, title=APP_NAME, subtitle="",
@@ -133,7 +144,8 @@ class NotificationController(QObject):
     # --- NotificationSink -------------------------------------------------------------------
 
     def show(self, notice: Notice) -> None:
-        notice = dataclasses.replace(notice, key=self._prefix + notice.key)
+        notice = dataclasses.replace(notice, key=self._prefix + notice.key,
+                                     silent=notice.silent or not self._sound)
         self._chat_of[notice.key] = notice.chat_id
         self._backend.show(notice)
 
@@ -278,6 +290,8 @@ class ScriptBackend:
                "display notification (item 3 of argv) with title (item 1 of argv)"
                " subtitle (item 2 of argv)\n"
                "end run")
+    _SCRIPT_SOUND = _SCRIPT.replace(" subtitle (item 2 of argv)",
+                                    " subtitle (item 2 of argv) sound name \"default\"")
 
     def __init__(self) -> None:
         self.on_activated: Callable[[str], None] = lambda key: None
@@ -288,7 +302,8 @@ class ScriptBackend:
     async def _run(self, notice: Notice) -> None:
         try:
             process = await asyncio.create_subprocess_exec(
-                "osascript", "-e", self._SCRIPT, notice.title, notice.subtitle, notice.body,
+                "osascript", "-e", self._SCRIPT if notice.silent else self._SCRIPT_SOUND,
+                notice.title, notice.subtitle, notice.body,
                 stdout=asyncio.subprocess.DEVNULL, stderr=asyncio.subprocess.DEVNULL)
             await process.wait()
         except OSError as e:
