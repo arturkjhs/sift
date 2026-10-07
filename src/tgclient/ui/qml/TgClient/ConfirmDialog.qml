@@ -11,6 +11,7 @@ Popup {
     property string option: ""        // the switch's label; "" = no switch
     property string confirmText: qsTr("OK")
     property bool danger: true
+    property bool canCancel: true     // false: just a message with OK
     property var payload: null        // whatever the caller needs back
 
     signal accepted(bool checked, var payload)
@@ -75,6 +76,7 @@ Popup {
             spacing: 8
             Item { Layout.fillWidth: true }
             PillButton {
+                visible: root.canCancel
                 text: qsTr("Cancel")
                 onClicked: root.close()
             }

@@ -44,6 +44,7 @@ from ..store import links
 from ..store.link_preview import message_link_preview
 from ..store.forums import ForumStore, Topic, message_topic_id, topic_obj
 from ..store.pinned import PinnedMessages
+from ..store.keyboards import inline_button, inline_rows, reply_keyboard
 from ..store.polls import poll_view
 from ..store.media import (
     Media,
@@ -129,6 +130,7 @@ class Role(IntEnum):
     Selected = auto()  # in the multi-selection (Cmd/Ctrl/Shift-click)
     LinkPreview = auto()  # {url, site, title, text, image, width, height, large, label} or {}
     Poll = auto()  # store.polls.poll_view: a poll, quiz or checklist; {} otherwise
+    InlineKeyboard = auto()  # a bot's buttons under the message: [[{text, kind, ...}]]
 
 
 # Roles that depend on file state (refreshed when a file of the message changes).
@@ -212,6 +214,8 @@ class MessageListModel(QAbstractListModel):
     reactorsChanged = Signal()
     pinnedChanged = Signal()
     chatSearchChanged = Signal()
+    botAnswer = Signal(str, bool)  # a bot's answer to a button: text, as an alert
+    replyKeyboardChanged = Signal()
     chatSearchJump = Signal("QVariant")  # a search result to show (QML jumps and flashes)
 
     def __init__(
@@ -234,6 +238,8 @@ class MessageListModel(QAbstractListModel):
         self._first_unread = 0  # message showing the "Unread messages" separator
         self._at_latest = True
         self._pinned: PinnedMessages | None = None
+        self._keyboard_hidden = 0  # a one-time keyboard used (its message id), or closed
+        self._keyboards_asked: set[tuple[int, int]] = set()
         self._search_query = ""
         self._search_ids: list[int] = []  # results, newest first
         self._search_next = 0  # next_from_message_id for more results (0: no more)
@@ -562,6 +568,86 @@ class MessageListModel(QAbstractListModel):
             self._spawn(self._request({"@type": "unpinAllChatMessages",
                                        "chat_id": self._history.chat_id}, "Unpinning all"))
 
+    # --- bot keyboards ------------------------------------------------------------------------
+
+    @Slot("QVariant", int, int)
+    def pressButton(self, message_id: Any, row: int, column: int) -> None:
+        """A button under a bot's message."""
+        history = self._history
+        message = history.get(int(message_id or 0)) if history else None
+        button = inline_button(message, row, column) if message else None
+        if history is None or message is None or button is None:
+            return
+        kind = button.get("type") or {}
+        match kind.get("@type"):
+            case "inlineKeyboardButtonTypeUrl" | "inlineKeyboardButtonTypeLoginUrl":
+                self.openLink(kind.get("url", ""))
+            case "inlineKeyboardButtonTypeCallback":
+                self._spawn(self._callback(history.chat_id, message["id"], kind.get("data", "")))
+            case "inlineKeyboardButtonTypeCopyText":
+                QGuiApplication.clipboard().setText(kind.get("text", ""))
+                self.botAnswer.emit("Copied", False)
+            case "inlineKeyboardButtonTypeUser":
+                self.openLink(f"tg://user?id={kind.get('user_id', 0)}")
+            case _:
+                self.botAnswer.emit("This button works only in the official apps", False)
+
+    async def _callback(self, chat_id: int, message_id: int, data: str) -> None:
+        try:
+            answer = await self._client.send({
+                "@type": "getCallbackQueryAnswer", "chat_id": chat_id, "message_id": message_id,
+                "payload": {"@type": "callbackQueryPayloadData", "data": data}}, timeout=35)
+        except (TdError, TimeoutError) as e:
+            log.info("Bot didn't answer: %s", e)
+            self.botAnswer.emit("The bot didn't answer", False)
+            return
+        if answer.get("text"):
+            self.botAnswer.emit(answer["text"], bool(answer.get("show_alert")))
+        if answer.get("url"):
+            self.openLink(answer["url"])
+
+    @Property("QVariantMap", notify=replyKeyboardChanged)
+    def replyKeyboard(self) -> dict[str, Any]:
+        """The keyboard a bot shows in the open chat (instead of typing), or {}."""
+        chat = self._chat()
+        if chat is None or not chat.reply_markup_message_id:
+            return {}
+        if chat.reply_markup_message is None:
+            self._spawn(self._fetch_keyboard(chat.id, chat.reply_markup_message_id))
+            return {}
+        keyboard = reply_keyboard(chat.reply_markup_message)
+        if keyboard and keyboard["messageId"] == self._keyboard_hidden:
+            return {}
+        return keyboard
+
+    @Slot(str)
+    def sendKeyboardButton(self, text: str) -> None:
+        keyboard = self.replyKeyboard
+        if keyboard.get("oneTime"):
+            self._keyboard_hidden = keyboard["messageId"]
+            self.replyKeyboardChanged.emit()
+        self.sendMessage(text, 0, {})
+
+    @Slot()
+    def hideReplyKeyboard(self) -> None:
+        self._keyboard_hidden = self.replyKeyboard.get("messageId", 0)
+        self.replyKeyboardChanged.emit()
+
+    async def _fetch_keyboard(self, chat_id: int, message_id: int) -> None:
+        chat = self._chats.chats.get(chat_id)
+        if chat is None or (chat_id, message_id) in self._keyboards_asked:
+            return
+        self._keyboards_asked.add((chat_id, message_id))
+        try:
+            message = await self._client.send({"@type": "getMessage", "chat_id": chat_id,
+                                                "message_id": message_id})
+        except TdError as e:
+            log.info("The bot keyboard's message is gone: %s", e)
+            return
+        if chat.reply_markup_message_id == message_id:
+            chat.reply_markup_message = message
+            self.replyKeyboardChanged.emit()
+
     @Slot("QVariant", "QVariantList")
     def vote(self, message_id: Any, options: list[Any]) -> None:
         """Answer a poll ([] takes the vote back)."""
@@ -766,6 +852,7 @@ class MessageListModel(QAbstractListModel):
         self.statusChanged.emit()
         self.countersChanged.emit()
         self.selectionChanged.emit()
+        self.replyKeyboardChanged.emit()
         self._sync_latest()
         if topic_id == TOPIC_LIST:
             return
@@ -1345,6 +1432,8 @@ class MessageListModel(QAbstractListModel):
                 return bool(album) and row != album[0]
             case Role.LinkPreview:
                 return self._link_preview(message)
+            case Role.InlineKeyboard:
+                return inline_rows(message)
             case Role.Poll:
                 return poll_view(content, lambda sender: self._sender_name(
                     {"sender_id": sender}))
@@ -1831,6 +1920,7 @@ class MessageListModel(QAbstractListModel):
         if kind == "chat" and self._history and payload == self._history.chat_id:
             self.chatChanged.emit()  # title etc.
             self.countersChanged.emit()
+            self.replyKeyboardChanged.emit()
             if self.rowCount() > 0:  # read receipts
                 self.dataChanged.emit(
                     self.index(0), self.index(self.rowCount() - 1), [Role.Status]

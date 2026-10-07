@@ -260,5 +260,33 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.warnings, [], "QML warnings with polls")
 
 
+    async def test_bot_keyboards(self) -> None:
+        import test_keyboards
+
+        bot = {**MESSAGES[60], "id": 104, "reply_markup": test_keyboards.INLINE,
+               "content": {"@type": "messageText", "text": {"text": "Rate the route",
+                                                            "entities": []}}}
+        self.open_chat(FORUM)
+        self.session.messages.openTopic(7)
+        await wait_until(lambda: (self.pump(), self.session.messages.rowCount())[1] > 0)
+        self.session.client._dispatch({"@type": "updateNewMessage", "message": bot})
+        self.session.client._dispatch({"@type": "updateChatReplyMarkup", "chat_id": FORUM,
+                                       "reply_markup_message": {
+                                           **MESSAGES[59], "id": 105,
+                                           "reply_markup": test_keyboards.KEYBOARD}})
+        await self.settle()
+        feed = next(i for i in _all_items(self.window.contentItem())
+                    if i.metaObject().className().startswith("QQuickListView")
+                    and i.property("model") is self.session.messages)
+        feed.positionViewAtBeginning()
+        self.session.messages.botAnswer.emit("Thanks for voting!", False)
+        await self.settle()
+        self.assertTrue(self.item("replyKeyboard").isVisible())
+        self.assertTrue(any(i.objectName() == "inlineKeyboard" and i.isVisible()
+                            for i in _all_items(self.window.contentItem())))
+        _screenshot(self.window, "bot-keyboards")
+        self.assertEqual(self.warnings, [], "QML warnings with bot keyboards")
+
+
 if __name__ == "__main__":
     unittest.main()

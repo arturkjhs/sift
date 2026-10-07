@@ -83,6 +83,8 @@ class Chat:
     is_marked_as_unread: bool = False
     notification_settings: dict[str, Any] = field(default_factory=dict)  # TDLib, as is
     can_delete_for_all: bool = False  # private chats: clear history for both sides
+    reply_markup_message_id: int = 0  # a bot's keyboard (replyMarkupShowKeyboard) is on it
+    reply_markup_message: dict[str, Any] | None = None  # once known (updateChatReplyMarkup)
 
 
 @dataclass
@@ -122,6 +124,7 @@ class ChatStore:
             "updateMessageMentionRead": self._on_mention_count,
             "updateChatUnreadReactionCount": self._on_reaction_count,
             "updateChatIsMarkedAsUnread": self._on_marked_unread,
+            "updateChatReplyMarkup": self._on_reply_markup,
             "updateMessageUnreadReactions": self._on_reaction_count,
             "updateChatNotificationSettings": self._on_notification_settings,
             "updateScopeNotificationSettings": self._on_scope_settings,
@@ -247,6 +250,7 @@ class ChatStore:
             draft=raw.get("draft_message"),
             is_marked_as_unread=bool(raw.get("is_marked_as_unread")),
             can_delete_for_all=bool(raw.get("can_be_deleted_for_all_users")),
+            reply_markup_message_id=int(raw.get("reply_markup_message_id") or 0),
         )
         self.chats[chat.id] = chat
         self._set_photo(chat, raw.get("photo"))
@@ -305,6 +309,14 @@ class ChatStore:
             event["chat_id"],
             lambda c: setattr(c, "unread_mention_count", event["unread_mention_count"]),
         )
+
+    def _on_reply_markup(self, event: Event) -> None:
+        def apply(chat: Chat) -> None:
+            message = event.get("reply_markup_message")
+            chat.reply_markup_message = message
+            chat.reply_markup_message_id = int((message or {}).get("id") or 0)
+
+        self._update_chat(event["chat_id"], apply)
 
     def _on_marked_unread(self, event: Event) -> None:
         self._update_chat(

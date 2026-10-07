@@ -162,8 +162,9 @@
 - [x] **Опросы и чек-листы:** рендер вариантов, голосование (`setPollAnswer`), результаты;
   чек-листы — отметка пунктов.
   → `store/polls.py`, `PollContent.qml`, `messages.vote/markTask`, `updatePoll` в `ChatHistory`.
-- [ ] **Кнопки ботов.** Inline-клавиатура (`getCallbackQueryAnswer`, url-кнопки), обычная
+- [x] **Кнопки ботов.** Inline-клавиатура (`getCallbackQueryAnswer`, url-кнопки), обычная
   клавиатура бота над полем ввода.
+  → `store/keyboards.py`, роль `inlineKeyboard`, `messages.pressButton/replyKeyboard/sendKeyboardButton`, тост и окно ответа бота.
 - [ ] **Комментарии к постам каналов** (обсуждение через связанную группу).
 - [ ] **Отложенная и тихая отправка.** `messageSendOptions`: `disable_notification`,
   `scheduling_state` с датой; список отложенных.

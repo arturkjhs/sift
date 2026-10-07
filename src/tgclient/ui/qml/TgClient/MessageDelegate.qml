@@ -52,6 +52,7 @@ Item {
     required property bool selected
     required property var linkPreview      // {url, site, title, text, image, ...} or {}
     required property var poll             // a poll, quiz or checklist, or {}
+    required property var inlineKeyboard   // a bot's buttons: [[{text, kind, row, column}]]
 
     property bool isGroupChat: false
     property bool flashed: false   // just jumped to: briefly tinted
@@ -65,6 +66,7 @@ Item {
     signal reactionToggled(var messageId, string key)
     signal selectToggled(var messageId, bool range)   // range: Shift-click
     signal reactRequested(var messageId, var button)   // the hover button: pick a reaction
+    signal buttonPressed(var messageId, int row, int column)  // a bot's inline button
 
     readonly property real sidePadding: 16
     readonly property real avatarSpace: isGroupChat && !isOutgoing ? 40 : 0
@@ -176,8 +178,70 @@ Item {
 
         Item {
             width: parent.width
-            height: visible ? bubble.height : 0
+            height: visible ? bubble.height + (keyboard.visible ? keyboard.height + 4 : 0) : 0
             visible: !root.isService
+
+            // A bot's buttons, under the bubble.
+            Column {
+                id: keyboard
+                objectName: "inlineKeyboard"
+                visible: root.inlineKeyboard !== undefined && root.inlineKeyboard.length > 0
+                x: bubble.x
+                y: bubble.height + 4
+                width: Math.max(bubble.width, 240)
+                spacing: 4
+                Repeater {
+                    model: keyboard.visible ? root.inlineKeyboard : []
+                    Row {
+                        id: buttonRow
+                        required property var modelData
+                        spacing: 4
+                        Repeater {
+                            model: buttonRow.modelData
+                            AbstractButton {
+                                id: botButton
+                                required property var modelData
+                                width: (keyboard.width - (buttonRow.modelData.length - 1) * 4)
+                                       / buttonRow.modelData.length
+                                height: 34
+                                hoverEnabled: true
+                                enabled: modelData.kind !== "disabled"
+                                onClicked: root.buttonPressed(root.messageId, modelData.row,
+                                                              modelData.column)
+                                background: Rectangle {
+                                    radius: 8
+                                    color: botButton.hovered ? Theme.hover : Theme.bubbleIn
+                                    border.width: 1
+                                    border.color: Theme.separator
+                                }
+                                contentItem: Item {
+                                    Text {
+                                        anchors.centerIn: parent
+                                        width: parent.width - 16
+                                        horizontalAlignment: Text.AlignHCenter
+                                        text: botButton.modelData.text
+                                        textFormat: Text.PlainText
+                                        elide: Text.ElideRight
+                                        color: botButton.modelData.supported ? Theme.accent
+                                                                             : Theme.textMuted
+                                        font.pixelSize: Theme.fontBody
+                                        font.weight: Font.DemiBold
+                                    }
+                                    Icon {
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        anchors.margins: 3
+                                        visible: botButton.modelData.kind === "url"
+                                        name: "open"
+                                        color: Theme.accent
+                                        size: 11
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
 
             Rectangle {  // in the multi-selection
                 objectName: "selectionTint"

@@ -508,7 +508,7 @@ Rectangle {
                 TextArea {
                     id: input
                     objectName: "composerInput"
-                    placeholderText: qsTr("Write a message")
+                    placeholderText: messages.replyKeyboard.placeholder || qsTr("Write a message")
                     wrapMode: TextArea.Wrap
                     color: Theme.text
                     placeholderTextColor: Theme.textMuted

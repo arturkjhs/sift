@@ -50,6 +50,7 @@ src/tgclient/
   store/pinned.py    закреплённые сообщения открытого чата/темы для полосы под шапкой
   store/forums.py    форумы: супергруппы с темами, список тем и их счётчики
   store/polls.py     опросы, викторины, чек-листы → вид для QML
+  store/keyboards.py клавиатуры ботов: inline-кнопки под сообщением, reply-клавиатура
   models/    Qt-модели для QML: chat_list.py (сортированный список с move-анимацией), folders.py,
              messages.py (лента открытого чата, отправка, прочтение, действия над сообщениями,
              статус в шапке), composer.py (черновики, вложения, вставка из буфера, свой typing),
@@ -414,6 +415,12 @@ src/tgclient/
   шаг — `chatSearchJump(id)` → `showMessage`. Совпадения в тексте подсвечивает
   `richtext.highlight_html` (только вне тегов; метка времени вставляется после — через
   `_TAIL`-заглушку, иначе подсвечивались бы её цифры).
+- Кнопки ботов: роль `inlineKeyboard` → ряды кнопок под пузырём (`messages.pressButton`):
+  URL/LoginUrl/User — `openLink`, Callback — `getCallbackQueryAnswer` (ответ — тост или окно
+  при `show_alert`, `url` — открыть), CopyText — буфер; игры, WebApp, оплата и т.п. — тост «только
+  в официальных приложениях». Reply-клавиатура — `chat.reply_markup_message_id`
+  (`updateChatReplyMarkup` несёт сообщение, иначе `getMessage`) → `messages.replyKeyboard` над
+  полем ввода, кнопка шлёт свой текст, `one_time` прячется после нажатия, «×» — спрятать.
 - Опросы/чек-листы: роль `poll` (`store/polls.poll_view`) → `PollContent.qml` в пузыре.
   Голос — `messages.vote(id, [индексы])` (`setPollAnswer`, `[]` — отозвать; один ответ — сразу
   по клику, несколько — галочки и «Vote»), результаты после голоса/закрытия; `updatePoll`

@@ -104,6 +104,12 @@ Item {
         function onViewerRequested(messageId) { viewer.open(messageId) }
         // A t.me link to a message: jump to it here, or open the other chat.
         function onSearchRequested(query) { root.searchRequested(query) }
+        function onBotAnswer(text, alert) {
+            if (alert)
+                botAlert.ask(text, "", qsTr("OK"), "", null)
+            else
+                toast.show(text)
+        }
         function onInviteReady(info) { inviteDialog.show(info) }
         function onJoinRequested() { joinNotice.visible = true }
         function onLinkResolved(chatId, messageId) {
@@ -491,6 +497,7 @@ Item {
                     selecting: messages.selectionCount > 0
                     onSelectToggled: (id, range) => range ? messages.selectRange(id)
                                                           : messages.toggleSelected(id)
+                    onButtonPressed: (id, row, column) => messages.pressButton(id, row, column)
                     onReactRequested: (id, button) => {
                         const at = button.mapToItem(Overlay.overlay, 0, 0)
                         reactionPicker.waitingFor = id
@@ -660,6 +667,58 @@ Item {
             onActivated: messages.clearSelection()
         }
 
+        // A bot's own keyboard instead of typing (its buttons send their text).
+        Rectangle {
+            id: replyKeyboard
+            objectName: "replyKeyboard"
+            Layout.fillWidth: true
+            readonly property var rows: messages.replyKeyboard.rows || []
+            visible: rows.length > 0 && messages.canWrite && !selectionBar.visible
+                     && !messages.topicsMode
+            implicitHeight: visible ? keyboardColumn.implicitHeight + 16 : 0
+            color: Theme.sidebar
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Theme.separator
+            }
+            Column {
+                id: keyboardColumn
+                x: 12
+                y: 8
+                width: parent.width - 24 - 30
+                spacing: 6
+                Repeater {
+                    model: replyKeyboard.rows
+                    Row {
+                        id: keyRow
+                        required property var modelData
+                        spacing: 6
+                        Repeater {
+                            model: keyRow.modelData
+                            PillButton {
+                                required property string modelData
+                                width: (keyboardColumn.width - (keyRow.modelData.length - 1) * 6)
+                                       / keyRow.modelData.length
+                                text: modelData
+                                onClicked: messages.sendKeyboardButton(modelData)
+                            }
+                        }
+                    }
+                }
+            }
+            IconButton {
+                anchors.right: parent.right
+                anchors.rightMargin: 8
+                anchors.top: parent.top
+                anchors.topMargin: 8
+                iconName: "close"
+                glyphSize: 11
+                Accessible.name: qsTr("Hide the bot's keyboard")
+                onClicked: messages.hideReplyKeyboard()
+            }
+        }
+
         // Opened from a link without being a member: join instead of writing.
         Rectangle {
             objectName: "joinBar"
@@ -706,6 +765,49 @@ Item {
                 list.positionViewAtBeginning()
             }
         }
+    }
+
+    // Short notices (a bot's answer to a button, "Copied").
+    Rectangle {
+        id: toast
+        objectName: "toast"
+        property alias text: toastText.text
+        function show(message) {
+            toastText.text = message
+            toastTimer.restart()
+        }
+        x: (list.width - width) / 2  // the feed starts at the left edge
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: composer.height + 70
+        width: Math.min(toastText.implicitWidth + 32, list.width - 48)
+        height: toastText.implicitHeight + 16
+        radius: 10
+        color: Theme.popup
+        border.width: 1
+        border.color: Theme.popupBorder
+        visible: opacity > 0
+        opacity: toastTimer.running ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: 160 } }
+        Text {
+            id: toastText
+            anchors.centerIn: parent
+            width: parent.width - 32
+            horizontalAlignment: Text.AlignHCenter
+            wrapMode: Text.Wrap
+            color: Theme.text
+            font.pixelSize: Theme.fontBody
+        }
+        Timer {
+            id: toastTimer
+            interval: 3000
+        }
+    }
+
+    ConfirmDialog {
+        id: botAlert
+        objectName: "botAlert"
+        danger: false
+        canCancel: false
     }
 
     // Jump buttons over the feed's bottom-right corner: unread reactions, mentions, newest.
