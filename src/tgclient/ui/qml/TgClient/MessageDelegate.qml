@@ -50,6 +50,7 @@ Item {
     required property string stickerFormat
     required property string playbackPath
     required property bool selected
+    required property var linkPreview      // {url, site, title, text, image, ...} or {}
 
     property bool isGroupChat: false
     property bool flashed: false   // just jumped to: briefly tinted
@@ -245,6 +246,7 @@ Item {
                     media.visible ? media.naturalWidth
                                     + (root.timeBesideMedia ? timeRow.implicitWidth + 12 : 0) : 0,
                     body.visible ? body.implicitWidth : 0,
+                    linkCard.visible ? linkCard.naturalWidth : 0,
                     translationBlock.visible ? translationBlock.naturalWidth : 0,
                     transcriptText.visible ? transcriptText.implicitWidth
                         + (root.timeBesideMedia ? timeRow.implicitWidth + 12 : 0) : 0,
@@ -449,6 +451,106 @@ Item {
                         }
                     }
 
+                    // Link preview: site, title, description, picture (on the side or below).
+                    Rectangle {
+                        id: linkCard
+                        objectName: "linkCard"
+                        readonly property var lp: root.linkPreview || ({})
+                        readonly property bool hasImage: (lp.image || "") !== ""
+                        readonly property bool sideImage: hasImage && !lp.large
+                        readonly property real naturalWidth: Math.min(340, Math.max(
+                            siteText.implicitWidth, titleText.implicitWidth,
+                            descriptionText.implicitWidth, lp.large ? lp.width || 0 : 0)
+                            + 18 + (sideImage ? 66 : 0))
+                        visible: (lp.url || "") !== ""
+                        width: parent.width
+                        height: Math.max(cardColumn.height, sideImage ? 62 : 0) + 12
+                        radius: 6
+                        color: Theme.replyBackground
+
+                        Rectangle {
+                            width: 3
+                            height: parent.height
+                            radius: 1.5
+                            color: Theme.replyBar
+                        }
+                        Image {
+                            visible: linkCard.sideImage
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.margins: 6
+                            width: 56
+                            height: 56
+                            source: linkCard.sideImage ? linkCard.lp.image : ""
+                            sourceSize.width: 112
+                            sourceSize.height: 112
+                            fillMode: Image.PreserveAspectCrop
+                            asynchronous: true
+                        }
+                        Column {
+                            id: cardColumn
+                            x: 10
+                            y: 6
+                            width: parent.width - 16 - (linkCard.sideImage ? 64 : 0)
+                            spacing: 2
+
+                            Text {
+                                id: siteText
+                                width: parent.width
+                                visible: text !== ""
+                                text: linkCard.lp.site || ""
+                                textFormat: Text.PlainText
+                                elide: Text.ElideRight
+                                color: Theme.accent
+                                font.pixelSize: Theme.fontSmall
+                                font.weight: Font.DemiBold
+                            }
+                            Text {
+                                id: titleText
+                                width: parent.width
+                                visible: text !== ""
+                                text: linkCard.lp.title || ""
+                                textFormat: Text.PlainText
+                                wrapMode: Text.Wrap
+                                maximumLineCount: 2
+                                elide: Text.ElideRight
+                                color: Theme.text
+                                font.pixelSize: Theme.fontBody
+                                font.weight: Font.DemiBold
+                            }
+                            Text {
+                                id: descriptionText
+                                width: parent.width
+                                visible: text !== ""
+                                text: linkCard.lp.text || ""
+                                textFormat: Text.PlainText
+                                wrapMode: Text.Wrap
+                                maximumLineCount: 4
+                                elide: Text.ElideRight
+                                color: Theme.text
+                                font.pixelSize: Theme.fontSmall
+                            }
+                            Image {  // large picture under the text
+                                visible: linkCard.hasImage && !linkCard.sideImage
+                                width: Math.min(parent.width, linkCard.lp.width || parent.width)
+                                height: visible ? width * (linkCard.lp.height || 3)
+                                                  / (linkCard.lp.width || 4) : 0
+                                source: visible ? linkCard.lp.image : ""
+                                fillMode: Image.PreserveAspectCrop
+                                asynchronous: true
+                            }
+                            Text {
+                                visible: text !== ""
+                                text: linkCard.lp.label || ""
+                                color: Theme.textMuted
+                                font.pixelSize: Theme.fontSmall
+                            }
+                        }
+
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onTapped: root.linkActivated(linkCard.lp.url) }
+                    }
+
                     // Translation into the user's language (Translate in the message menu).
                     Column {
                         id: translationBlock
@@ -565,7 +667,8 @@ Item {
                     }
 
                     Item {  // room for the time row when there's no text to tuck it into
-                        visible: (translationBlock.visible && !reactionFlow.visible)
+                        visible: ((translationBlock.visible || linkCard.visible)
+                                  && !reactionFlow.visible)
                                  || (!body.visible && !root.timeOnMedia && !root.timeBesideMedia
                                      && !reactionFlow.visible)
                         width: 1

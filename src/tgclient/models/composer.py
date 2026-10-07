@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 from pathlib import Path
 from typing import Any
@@ -20,6 +21,8 @@ from PySide6.QtCore import Property, QObject, QUrl, Signal, Slot
 from PySide6.QtGui import QGuiApplication, QImage
 
 from ..store.chats import ChatStore, draft_reply_to, draft_text
+from ..store.files import AUTO_PRIORITY
+from ..store.link_preview import parse as parse_link_preview
 from ..store.media import human_size
 from ..td.client import TdClient, TdError
 from .messages import MessageListModel, is_image_path
@@ -29,10 +32,14 @@ log = logging.getLogger(__name__)
 DRAFT_DELAY = 1.5  # seconds of no typing before the draft is saved
 TYPING_INTERVAL = 5.0  # Telegram shows a typing action for ~6 s
 PASTE_KEEP_DAYS = 7
+PREVIEW_DELAY = 0.6  # seconds of no typing before asking TDLib for the link's preview
+_URL = re.compile(r"(?:https?://|www\.|t\.me/)\S+|\b[\w-]+\.(?:com|org|net|io|dev|cz|ru|ua)"
+                  r"(?:/\S*)?\b", re.IGNORECASE)
 
 
 class ComposerModel(QObject):
     stagedChanged = Signal()
+    linkPreviewChanged = Signal()
     remoteDraft = Signal(str, "QVariant")  # text, reply-to id: replace the input
 
     def __init__(
@@ -51,6 +58,12 @@ class ComposerModel(QObject):
         self._save_task: asyncio.Task[Any] | None = None
         self._last_typing = 0.0
         self._staged: list[dict[str, Any]] = []
+        self._preview: dict[str, Any] = {}  # link preview of the input, as in the feed
+        self._preview_off = False  # the user removed it: send without a preview
+        self._preview_task: asyncio.Task[Any] | None = None
+        self._preview_url = ""
+        self._preview_image = 0  # file id of the preview's picture, while it downloads
+        chats.files.subscribe(self._on_file)
         self._tasks: set[asyncio.Task[Any]] = set()
         messages.chatChanged.connect(self._on_chat_changed)
         chats.subscribe(self._on_chats)
@@ -81,6 +94,7 @@ class ComposerModel(QObject):
         self._cancel_save()
         if (text.strip(), reply_to) != self._synced:
             self._save_task = self._spawn(self._save_later(self._chat_id, text, reply_to))
+        self._check_link(text)
 
     @Slot()
     def sent(self) -> None:
@@ -88,6 +102,7 @@ class ComposerModel(QObject):
         self._cancel_save()
         self._text, self._reply_to = "", 0
         self._synced = ("", 0)
+        self._reset_preview()
 
     def flush(self) -> asyncio.Future[Any] | None:
         """Save a pending draft now (switching chats, quitting)."""
@@ -114,6 +129,7 @@ class ComposerModel(QObject):
         self._reply_to = draft_reply_to(chat.draft) if chat else 0
         self._synced = (self._text.strip(), self._reply_to)
         self.clearStaged()
+        self._reset_preview()
 
     def _on_chats(self, kind: str, payload: Any) -> None:
         if kind != "chat" or payload != self._chat_id or not self._chat_id:
@@ -167,6 +183,87 @@ class ComposerModel(QObject):
         self._spawn(self._request({
             "@type": "sendChatAction", "chat_id": self._chat_id, "topic_id": None,
             "business_connection_id": "", "action": {"@type": "chatActionTyping"}}))
+
+    # --- link preview -----------------------------------------------------------------------
+
+    @Property("QVariantMap", notify=linkPreviewChanged)
+    def linkPreview(self) -> dict[str, Any]:
+        """Preview of the first link in the input ({} if none, or the user removed it)."""
+        return {} if self._preview_off else dict(self._preview)
+
+    @Property(bool, notify=linkPreviewChanged)
+    def linkPreviewOff(self) -> bool:
+        return self._preview_off
+
+    @Slot()
+    def removeLinkPreview(self) -> None:
+        self._preview_off = True
+        self.linkPreviewChanged.emit()
+
+    @Slot(result="QVariantMap")
+    def sendOptions(self) -> dict[str, Any]:
+        """For MessageListModel.sendMessage: what the composer decided about this message."""
+        return {"noPreview": self._preview_off}
+
+    def _check_link(self, text: str) -> None:
+        match = _URL.search(text)
+        url = match.group(0) if match else ""
+        if url == self._preview_url:
+            return
+        self._preview_url = url
+        if self._preview_task is not None:
+            self._preview_task.cancel()
+            self._preview_task = None
+        if not url:
+            if self._preview:
+                self._preview = {}
+                self.linkPreviewChanged.emit()
+            return
+        self._preview_task = self._spawn(self._fetch_preview(text, url))
+
+    async def _fetch_preview(self, text: str, url: str) -> None:
+        await asyncio.sleep(PREVIEW_DELAY)
+        try:
+            raw = await self._client.send({
+                "@type": "getLinkPreview",
+                "text": {"@type": "formattedText", "text": text, "entities": []},
+                "link_preview_options": None})
+        except TdError as e:
+            log.debug("No link preview for %s: %s", url, e)
+            raw = None
+        if url != self._preview_url:
+            return
+        preview = parse_link_preview(raw)
+        files = self._chats.files
+        image = ""
+        if preview is not None and preview.image:
+            files.register(preview.image)
+            image_id = preview.image["id"]
+            image = files.url("media", image_id) if files.path(image_id) else ""
+            if not image:
+                self._preview_image = image_id  # _on_file fills it in
+                files.download(image_id, AUTO_PRIORITY)
+        self._preview = {} if preview is None else {
+            "url": preview.url, "site": preview.site, "title": preview.title,
+            "text": preview.description, "image": image}
+        self.linkPreviewChanged.emit()
+
+    def _on_file(self, file_id: int) -> None:
+        if file_id != self._preview_image or not self._preview:
+            return
+        if self._chats.files.path(file_id):
+            self._preview_image = 0
+            self._preview["image"] = self._chats.files.url("media", file_id)
+            self.linkPreviewChanged.emit()
+
+    def _reset_preview(self) -> None:
+        if self._preview_task is not None:
+            self._preview_task.cancel()
+            self._preview_task = None
+        changed = bool(self._preview) or self._preview_off
+        self._preview, self._preview_off, self._preview_url = {}, False, ""
+        if changed:
+            self.linkPreviewChanged.emit()
 
     # --- attachments ------------------------------------------------------------------------
 

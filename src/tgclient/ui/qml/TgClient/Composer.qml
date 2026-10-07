@@ -29,7 +29,7 @@ Rectangle {
         }
         if (input.text.trim().length === 0)
             return
-        messages.send(input.text, root.replyToId)
+        messages.sendMessage(input.text, root.replyToId, composerModel.sendOptions())
         input.clear()
         composerModel.sent()
         root.sent()
@@ -111,7 +111,7 @@ Rectangle {
     }
 
     function sendTranslation() {
-        messages.send(root.translatedText, root.replyToId)
+        messages.sendMessage(root.translatedText, root.replyToId, composerModel.sendOptions())
         root.translatedText = ""
         input.clear()
         composerModel.sent()
@@ -346,6 +346,66 @@ Rectangle {
                 glyphSize: 11
                 Accessible.name: qsTr("Discard the translation")
                 onClicked: root.translatedText = ""
+            }
+        }
+
+        // Preview of the link in the input; removing it sends the message without one.
+        RowLayout {
+            objectName: "composerLinkPreview"
+            Layout.fillWidth: true
+            visible: root.editingId === 0 && (composerModel.linkPreview.url || "") !== ""
+            spacing: 10
+
+            Icon {
+                Layout.alignment: Qt.AlignVCenter
+                name: "link"
+                color: Theme.accent
+                size: 18
+            }
+            Rectangle {
+                Layout.preferredWidth: 3
+                Layout.fillHeight: true
+                radius: 1.5
+                color: Theme.replyBar
+            }
+            Image {
+                Layout.preferredWidth: 36
+                Layout.preferredHeight: 36
+                visible: (composerModel.linkPreview.image || "") !== ""
+                source: composerModel.linkPreview.image || ""
+                sourceSize.width: 72
+                sourceSize.height: 72
+                fillMode: Image.PreserveAspectCrop
+            }
+            ColumnLayout {
+                Layout.fillWidth: true
+                spacing: 1
+                Text {
+                    Layout.fillWidth: true
+                    text: composerModel.linkPreview.site || composerModel.linkPreview.title || ""
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    color: Theme.accent
+                    font.pixelSize: Theme.fontSmall
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    Layout.fillWidth: true
+                    text: composerModel.linkPreview.site ? (composerModel.linkPreview.title
+                                                             || composerModel.linkPreview.text || "")
+                                                          : (composerModel.linkPreview.text || "")
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSmall
+                }
+            }
+            IconButton {
+                objectName: "removeLinkPreview"
+                iconName: "close"
+                glyphSize: 11
+                Accessible.name: qsTr("Send without the link preview")
+                onClicked: composerModel.removeLinkPreview()
             }
         }
 

@@ -369,6 +369,12 @@ src/tgclient/
   (id по возрастанию — порядок для `forwardMessages`).
 - Взаимодействие: двойной клик по пузырю — ответить; правый клик — меню (Reply, Copy text);
   Enter — отправить, Shift+Enter — перенос; клик по цитате — прыжок к сообщению (если загружено).
+- Превью ссылок: `store/link_preview.parse` (linkPreview: фото, обложка/миниатюра видео,
+  chatPhoto у ссылок на людей/чаты) → роль `linkPreview` (карточка под текстом; картинка сбоку
+  или во всю ширину при `show_large_media`). В поле ввода `ComposerModel` спрашивает
+  `getLinkPreview` через 0.6 с после смены ссылки; «×» — `sendOptions().noPreview` →
+  `link_preview_options.is_disabled`. Текст из Composer уходит через `messages.sendMessage(text,
+  replyTo, composerModel.sendOptions())`.
 - Отправка: текст проходит через TDLib `parseMarkdown` (**bold**, __italic__, `code`, ```pre```,
   ~~strike~~, ||spoiler||, [text](url)), при ошибке уходит как plain text.
 

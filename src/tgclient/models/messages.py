@@ -40,6 +40,7 @@ from ..store.format import (
     message_body,
 )
 from ..store.history import DELETED_REPLY, ChatHistory, Commit, Message
+from ..store.link_preview import message_link_preview
 from ..store.media import (
     Media,
     album_id,
@@ -121,11 +122,12 @@ class Role(IntEnum):
     StickerFormat = auto()  # webp | tgs | webm
     PlaybackPath = auto()  # local file to play inline (animated sticker, GIF), "" until ready
     Selected = auto()  # in the multi-selection (Cmd/Ctrl/Shift-click)
+    LinkPreview = auto()  # {url, site, title, text, image, width, height, large, label} or {}
 
 
 # Roles that depend on file state (refreshed when a file of the message changes).
 MEDIA_ROLES = [Role.MediaSource, Role.FileInfo, Role.FileState, Role.FileProgress,
-               Role.SenderAvatar, Role.PlaybackPath, Role.AlbumItems]
+               Role.SenderAvatar, Role.PlaybackPath, Role.AlbumItems, Role.LinkPreview]
 _IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"}
 _VIEWER_KINDS = {"photo", "video", "animation", "videoNote"}
 
@@ -603,11 +605,16 @@ class MessageListModel(QAbstractListModel):
 
     @Slot(str, "QVariant")
     def send(self, text: str, reply_to: Any = 0) -> None:
+        self.sendMessage(text, reply_to, {})
+
+    @Slot(str, "QVariant", "QVariantMap")
+    def sendMessage(self, text: str, reply_to: Any, options: dict[str, Any]) -> None:
+        """Text from the composer; `options` from ComposerModel.sendOptions()."""
         history = self._history
         if history is None or not text.strip():
             return
         self._clear_unread_separator()
-        self._spawn(self._send(history.chat_id, text, int(reply_to or 0)))
+        self._spawn(self._send(history.chat_id, text, int(reply_to or 0), dict(options or {})))
 
     @Slot(int, int)
     def markViewed(self, first: int, last: int) -> None:
@@ -969,6 +976,8 @@ class MessageListModel(QAbstractListModel):
             case Role.AlbumHidden:
                 album = self._album_range(row)
                 return bool(album) and row != album[0]
+            case Role.LinkPreview:
+                return self._link_preview(message)
             case Role.Selected:
                 album = self._album_range(row)
                 members = history.messages[album[0]:album[1] + 1] if album else [message]
@@ -1126,6 +1135,28 @@ class MessageListModel(QAbstractListModel):
             self.dataChanged.emit(self.index(album[0]), self.index(album[1]))
             if album[1] + 1 < len(history.messages):  # the row above may regain its name
                 self.dataChanged.emit(self.index(album[1] + 1), self.index(album[1] + 1))
+
+    def _link_preview(self, message: Message) -> dict[str, Any]:
+        preview = message_link_preview(message.get("content", {}))
+        if preview is None:
+            return {}
+        image = ""
+        if preview.image:
+            file_id = preview.image["id"]
+            self._files.register(preview.image)
+            self._file_messages.setdefault(file_id, set()).add(message["id"])
+            if self._files.path(file_id):
+                image = self._files.url("media", file_id)
+            else:
+                self._files.download(file_id, AUTO_PRIORITY)
+                if preview.minithumbnail:
+                    self._files.minithumbnails[file_id] = preview.minithumbnail
+                    image = self._files.url("mini", file_id)
+        width, height = (fit(preview.width, preview.height, 320, 200, min_side=80)
+                         if preview.large and preview.width else (0, 0))
+        return {"url": preview.url, "site": preview.site, "title": preview.title,
+                "text": preview.description, "image": image, "large": preview.large,
+                "width": width, "height": height, "label": preview.label}
 
     def _media(self, message: Message) -> Media | None:
         message_id = message["id"]
@@ -1594,13 +1625,19 @@ class MessageListModel(QAbstractListModel):
             self._loading = value
             self.loadingChanged.emit()
 
-    async def _send(self, chat_id: int, text: str, reply_to: int) -> None:
+    async def _send(self, chat_id: int, text: str, reply_to: int,
+                    options: dict[str, Any] | None = None) -> None:
+        options = options or {}
         formatted = await self._formatted(text)
+        preview_options = ({"@type": "linkPreviewOptions", "is_disabled": True, "url": "",
+                            "force_small_media": False, "force_large_media": False,
+                            "show_above_text": False} if options.get("noPreview") else None)
         request: dict[str, Any] = {
             "@type": "sendMessage",
             "chat_id": chat_id,
             "input_message_content": {"@type": "inputMessageText", "text": formatted,
-                                      "link_preview_options": None, "clear_draft": True},
+                                      "link_preview_options": preview_options,
+                                      "clear_draft": True},
         }
         if reply_to:
             request["reply_to"] = {"@type": "inputMessageReplyToMessage", "message_id": reply_to}

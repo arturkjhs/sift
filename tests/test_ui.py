@@ -554,6 +554,17 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
             "origin": {"@type": "messageOriginHiddenUser", "sender_name": "Jana"}, "date": 1},
             "interaction_info": reactions}
         session.client._dispatch({"@type": "updateNewMessage", "message": forwarded})
+        linked = {**_msg(10, "Worth reading https://example.com/post"), "content": {
+            "@type": "messageText", "text": {"text": "Worth reading https://example.com/post",
+                                             "entities": []},
+            "link_preview": {"@type": "linkPreview", "url": "https://example.com/post",
+                             "display_url": "example.com/post", "site_name": "Example Blog",
+                             "title": "How we rebuilt the message list",
+                             "description": {"text": "Variable heights, smooth scrolling and "
+                                                     "what we learned along the way."},
+                             "author": "", "show_large_media": False,
+                             "type": {"@type": "linkPreviewTypeArticle", "photo": None}}}}
+        session.client._dispatch({"@type": "updateNewMessage", "message": linked})
         session.client._dispatch({"@type": "updateMessageInteractionInfo", "chat_id": 1,
                                   "message_id": 2, "interaction_info": reactions})
         session.client._dispatch({"@type": "updateChatAction", "chat_id": 1, "topic_id": None,
@@ -569,6 +580,9 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         message_list.positionViewAtBeginning()
         await settle(0.1)
         self.assertEqual(warnings, [], "QML warnings with reactions and forwards")
+        card = next(i for i in _all_items(message_list)
+                    if i.objectName() == "linkCard" and i.isVisible())
+        self.assertGreater(card.height(), 40)
         _screenshot(window, "reactions-typing-draft")
 
         # Context menu: actions come from TDLib first, then it pops up with quick reactions
