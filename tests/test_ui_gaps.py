@@ -445,6 +445,45 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         await self.settle(0.1)
         self.assertEqual(self.warnings, [], "QML warnings with all common chats")
 
+    async def test_claim_check_panel(self) -> None:
+        from PySide6.QtCore import QMetaObject, Q_ARG
+
+        from tgclient.services.ai import ClaimCheck, ClaimQuote
+
+        self.open_chat(FORUM)
+        await self.forums_loaded()
+        view = self.item("messageView")
+        QMetaObject.invokeMethod(view, "checkPersonClaim", Q_ARG("QVariant", FORUM),
+                                 Q_ARG("QVariant", "user:5"), Q_ARG("QVariant", "Olena"))
+        await self.settle()
+        self.assertTrue(self.item("claimField").isVisible())
+        self.assertFalse(self.item("personMessageList").isVisible())
+        ai = self.session.ai_service
+        model = self.session.person_messages
+        found = ("user:5", (FORUM,), "she'll bring the rope", 4)
+        ai._claims[found] = ClaimCheck(
+            "done", "She'll bring the rope", "partly",
+            "She offered to bring it, then said it may be someone else (worded differently).",
+            (ClaimQuote(FORUM, 59, "Climbers", 1_760_000_000, "t1 m59: I can bring the rope",
+                        "supports"),
+             ClaimQuote(FORUM, 60, "Climbers", 1_760_003_600, "t7 m60: maybe Petr takes it",
+                        "contradicts")),
+            count=40, since=1_759_000_000, until=1_760_003_600, chats=("Climbers",),
+            skipped=2, cost=0.0031, model="google/gemini-2.5-flash")
+        model._show_check(found)
+        await self.settle()
+        self.assertTrue(self.item("verdictBadge").isVisible())
+        _screenshot(self.window, "claim-check")
+        missing = ("user:5", (FORUM,), "she sold the car", 4)
+        ai._claims[missing] = ClaimCheck("done", "She sold the car", "not_found", count=40,
+                                         since=1_759_000_000, until=1_760_003_600,
+                                         chats=("Climbers",), model="google/gemini-2.5-flash")
+        model._show_check(missing)
+        await self.settle()
+        self.assertTrue(self.item("notFoundScope").isVisible())
+        _screenshot(self.window, "claim-check-not-found")
+        self.assertEqual(self.warnings, [], "QML warnings in the claim check")
+
     async def forums_loaded(self) -> None:
         await wait_until(lambda: (self.pump(), self.session.topics.rowCount())[1] == 2)
 

@@ -493,5 +493,22 @@
 "In all common chats": "Ve všech společných chatech",
 "Chats searched: %1": "Prohledáno chatů: %1",
 "Chats searched: %1 of %2": "Prohledáno chatů: %1 z %2",
-"More": "Další"
+"More": "Další",
+"Confirmed": "Potvrzeno",
+"Contradicted": "Vyvráceno",
+"Partly": "Částečně",
+"Not found": "Nenalezeno",
+"Check": "Ověřit",
+"Check what %1 said": "Co říkal(a) %1",
+"Check what %1 said…": "Ověřit, co říkal(a) %1…",
+"Check what they said…": "Ověřit, co říkal(a)…",
+"What did %1 say?": "Co řekl(a) %1?",
+"Only chats with AI on are checked": "Ověřují se jen chaty se zapnutou AI",
+"Checked in this chat (AI must be on)": "Ověření v tomto chatu (AI musí být zapnutá)",
+"Not found in %1 messages (%2) in %3.": "Nenalezeno v %1 zprávách (%2) v %3.",
+"No messages from %1 to check in %2.": "V %2 nejsou žádné zprávy od %1 k ověření.",
+"This doesn't prove it was never said.": "To nedokazuje, že to nikdy neřekl(a).",
+"contradicts": "vyvrací",
+"supports": "podporuje",
+"Not checked (AI is off there): %1 chats": "Neověřeno (AI je vypnutá): chatů %1"
 }

@@ -14,6 +14,10 @@ Results ("jobs") are keyed by (chat_id, subject): "" the chat summary, "user:<id
 "ask" a question about the chat, "events" dates and meetings, "answers:<id>" answers to a
 message, "doc:<id>" a question about a file, "explain:<id>" / "reply:<id>" one message explained or
 answered (streamed); chat 0 holds results across chats ("digest", "promises").
+
+"Check what <name> said" (check_claim) is not a job: its results live in memory for the
+session only, keyed by (sender, chats checked, normalized claim, PROMPT_VERSION), and never
+reach the disk cache. It checks only chats with AI on; quotes come from TDLib, not the model.
 """
 
 from __future__ import annotations
@@ -23,8 +27,9 @@ import json
 import logging
 import re
 import time
+from collections import defaultdict
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal
@@ -43,9 +48,10 @@ from .openrouter import Completion, OpenRouter, OpenRouterError
 log = logging.getLogger(__name__)
 
 ChangeKind = Literal["enabled", "transcript", "translation", "summary", "config", "flags",
-                     "usage"]
+                     "usage", "claim"]
 Listener = Callable[[ChangeKind, Any], None]
 Searcher = Callable[[str, int], Awaitable[list[Any]]]  # (query, chat_id) -> search hits
+SenderSearcher = Callable[[str, str], Awaitable[list[Any]]]  # (query, sender) -> search hits
 
 MAX_VOICE_BYTES = 20 * 1024 * 1024
 RECOGNIZE_POLL = 1.0  # seconds between asking for Telegram's recognition result
@@ -69,6 +75,11 @@ STYLE_EXAMPLES = 15  # the user's own messages showing how they write in the cha
 CONTEXT_TTL = 120.0  # seconds the collected context is reused (menu count -> request)
 MAX_ALLOWED_REACTIONS = 30  # offered to the model for a light message
 _PERIODS = {"unread": "unread messages", "day": "last 24 hours", "week": "last 7 days"}
+CLAIM_PER_SEARCH = 30  # their messages per chat and keyword (server search)
+CLAIM_RECENT = 40  # their latest messages in the open chat, always among the candidates
+CLAIM_MAX_MESSAGES = 150
+CLAIM_MAX_CHARS = 60_000
+CLAIM_CTX_CHARS = 300  # a replied-to message, shown as context
 
 
 @dataclass
@@ -102,6 +113,37 @@ class SummaryState:
     question: str = ""
     cost: float = 0.0
     data: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ClaimQuote:
+    """Evidence, rendered from the TDLib message (the model only names it)."""
+    chat_id: int
+    message_id: int
+    chat_title: str
+    date: int
+    text: str  # verbatim
+    relation: str  # supports | contradicts
+
+
+@dataclass(frozen=True)
+class ClaimCheck:
+    state: str  # pending | done | error
+    claim: str = ""
+    verdict: str = ""  # confirmed | contradicted | partly | not_found
+    explanation: str = ""
+    quotes: tuple[ClaimQuote, ...] = ()
+    count: int = 0  # their messages the model saw
+    since: int = 0  # dates of the oldest and newest of them
+    until: int = 0
+    chats: tuple[str, ...] = ()  # titles of the chats checked
+    skipped: int = 0  # chats in scope that were not checked (AI off, secret)
+    cost: float = 0.0
+    model: str = ""
+    error: str = ""
+
+
+ClaimKey = tuple[str, tuple[int, ...], str, int]
 
 
 @dataclass
@@ -144,6 +186,9 @@ class AiService:
         self.translate_to = translate_to
         self.read_languages = tuple(c for c in read_languages if c in assist.LANGUAGES)
         self.searcher: Searcher | None = None  # SearchService.search, set by the app
+        self.sender_searcher: SenderSearcher | None = None  # the same, one sender, all chats
+        self.person_search: Any = None  # services.person_search.PersonSearch, set by the app
+        self._claims: dict[ClaimKey, ClaimCheck] = {}  # this session only, never on disk
         self._transcripts: dict[tuple[int, int], Transcript] = {
             key: Transcript("done", text) for key, text in store.transcripts.items()
         }
@@ -1107,6 +1152,205 @@ class AiService:
             return True
         return assist.is_yes(reply.text)
 
+    # --- "Check what <name> said" ----------------------------------------------------------
+
+    def claim_scope(self, chat_ids: list[int]) -> tuple[list[int], int]:
+        """(chats that can be checked: AI on, never secret; how many of the rest were left
+        out)."""
+        wanted = list(dict.fromkeys(int(c) for c in chat_ids if c))
+        checked = [c for c in wanted if self.is_enabled(c)]
+        return checked, len(wanted) - len(checked)
+
+    def claim_check(self, key: ClaimKey) -> ClaimCheck | None:
+        return self._claims.get(key)
+
+    def check_claim(self, sender: str, name: str, chat_ids: list[int], current: int,
+                    claim: str) -> ClaimKey | None:
+        """Did <sender> say <claim>? Their messages in `chat_ids` (those with AI on), found by
+        search, go to the model; it answers with a verdict and the messages it rests on."""
+        claim = " ".join(claim.split())
+        if not claim or summaries.sender_object(sender) is None:
+            return None
+        checked, skipped = self.claim_scope(chat_ids)
+        key: ClaimKey = (sender, tuple(sorted(checked)), assist.normalize_claim(claim),
+                         assist.PROMPT_VERSION)
+        known = self._claims.get(key)
+        if known is not None and known.state in ("pending", "done"):
+            self._emit("claim", key)  # the same check again: free
+            return key
+        titles = self._titles(checked)
+        if not checked:
+            error = "AI is off in these chats" if skipped > 1 else "AI is turned off for this chat"
+            self._set_claim(key, ClaimCheck("error", claim, skipped=skipped, error=error))
+        elif self._router is None:
+            self._set_claim(key, ClaimCheck(
+                "error", claim, skipped=skipped,
+                error="Add an OpenRouter API key in Settings to use AI features"))
+        else:
+            self._set_claim(key, ClaimCheck("pending", claim, chats=titles, skipped=skipped,
+                                            model=self.summary_model))
+            self._spawn(self._run_claim(key, sender, name, checked, current, claim, skipped))
+        return key
+
+    async def _run_claim(self, key: ClaimKey, sender: str, name: str, checked: list[int],
+                         current: int, claim: str, skipped: int) -> None:
+        try:
+            result = await self._claim(sender, name, checked, current, claim, skipped)
+        except (AiUnavailable, OpenRouterError) as e:
+            result = ClaimCheck("error", claim, skipped=skipped, error=str(e))
+        except TdError as e:
+            result = ClaimCheck("error", claim, skipped=skipped, error=f"Telegram: {e.message}")
+        except Exception:
+            log.exception("Claim check failed")
+            result = ClaimCheck("error", claim, skipped=skipped,
+                                error="Unexpected error, see the log")
+        self._set_claim(key, result)
+
+    async def claim_candidates(self, sender: str, chat_ids: list[int], current: int,
+                               claim: str) -> list[dict[str, Any]]:
+        """Their messages that may bear on the claim, the most relevant first, within
+        CLAIM_MAX_MESSAGES / CLAIM_MAX_CHARS: the server search by the claim's words in each
+        chat, the local search by meaning, their latest messages in the open chat."""
+        target = summaries.sender_object(sender) or {}
+        found: dict[tuple[int, int], dict[str, Any]] = {}
+        semantic: dict[tuple[int, int], float] = {}
+
+        def add(message: dict[str, Any]) -> None:
+            if message and _same_sender(message.get("sender_id") or {}, target) \
+                    and message.get("chat_id") in chat_ids:
+                found.setdefault((message["chat_id"], message["id"]), message)
+
+        words = assist.claim_keywords(claim)
+        if self.person_search is not None:
+            for word in words:
+                for result in await self.person_search.in_chats(chat_ids, sender, word,
+                                                                limit=CLAIM_PER_SEARCH):
+                    for message in result.messages:
+                        add(message)
+            if current in chat_ids:
+                recent, _ = await self.person_search.page(current, sender, "",
+                                                          limit=CLAIM_RECENT)
+                for message in recent:
+                    add(message)
+        if self.sender_searcher is not None:
+            hits = [h for h in await self.sender_searcher(claim, sender)
+                    if h.chat_id in chat_ids]
+            for rank, hit in enumerate(hits):
+                semantic[(hit.chat_id, hit.message_id)] = 2.0 - rank / max(len(hits), 1)
+            for message in await self._get_messages(
+                    [(h.chat_id, h.message_id) for h in hits
+                     if (h.chat_id, h.message_id) not in found]):
+                add(message)
+
+        def score(key: tuple[int, int]) -> tuple[float, int]:
+            text = self._claim_text(found[key]).lower()
+            return (-(sum(word in text for word in words) + semantic.get(key, 0.0)),
+                    -found[key].get("date", 0))
+
+        chosen: list[dict[str, Any]] = []
+        chars = 0
+        for key in sorted(found, key=score):
+            text = self._claim_text(found[key])
+            if not text:
+                continue
+            if len(chosen) >= CLAIM_MAX_MESSAGES or chars + len(text) > CLAIM_MAX_CHARS:
+                break
+            chosen.append(found[key])
+            chars += len(text)
+        return chosen
+
+    async def _claim(self, sender: str, name: str, checked: list[int], current: int,
+                     claim: str, skipped: int) -> ClaimCheck:
+        candidates = await self.claim_candidates(sender, checked, current, claim)
+        titles = self._titles(checked)
+        dates = [m.get("date", 0) for m in candidates]
+        base = ClaimCheck("done", claim, count=len(candidates), since=min(dates, default=0),
+                          until=max(dates, default=0), chats=titles, skipped=skipped,
+                          model=self.summary_model)
+        if not candidates:  # nothing of theirs to judge from: no request
+            return replace(base, verdict="not_found")
+        lines, refs = await self._claim_lines(candidates, current)
+        self._check_chats(checked)  # AI may have been turned off meanwhile
+        reply = await self._complete(
+            checked[0] if len(checked) == 1 else 0, "claim", self.summary_model,
+            assist.claim_prompt(name, self._reader(), claim, lines, self.translate_to),
+            cache=False)
+        parsed = assist.parse_claim(reply.text)
+        quotes: list[ClaimQuote] = []
+        for n, relation in parsed.evidence:
+            message = refs.get(n)  # made-up refs and the [ctx] lines are not there
+            if message is None or len(quotes) >= assist.MAX_EVIDENCE:
+                continue
+            chat = self._chats.chats.get(message["chat_id"])
+            quotes.append(ClaimQuote(message["chat_id"], message["id"],
+                                     chat.title if chat else "", message.get("date", 0),
+                                     self._verbatim(message), relation))
+        verdict, explanation = parsed.verdict, parsed.explanation
+        if not quotes or verdict == "not_found":
+            # a verdict without evidence is not shown as one
+            verdict, quotes = "not_found", []
+            explanation = explanation if parsed.verdict == "not_found" else ""
+        return replace(base, verdict=verdict, explanation=explanation, quotes=tuple(quotes),
+                       cost=reply.cost)
+
+    async def _claim_lines(self, candidates: list[dict[str, Any]], current: int
+                           ) -> tuple[str, dict[int, dict[str, Any]]]:
+        """The input lines: per chat (the open one first), oldest first; [m<n>] for their
+        messages, [ctx] for the messages they replied to (context, not evidence)."""
+        by_chat: dict[int, list[dict[str, Any]]] = defaultdict(list)
+        for message in candidates:
+            by_chat[message["chat_id"]].append(message)
+        wanted = [(c, r) for c, ms in by_chat.items() for m in ms
+                  if (r := summaries.replied_id(m)) and r not in {x["id"] for x in ms}]
+        replied = {(m["chat_id"], m["id"]): m for m in await self._get_messages(wanted)}
+        lines: list[str] = []
+        refs: dict[int, dict[str, Any]] = {}
+        for chat_id in sorted(by_chat, key=lambda c: (c != current, c)):
+            chat = self._chats.chats.get(chat_id)
+            lines.append(f"\nChat: {chat.title if chat else chat_id}")
+            theirs = {m["id"]: m for m in by_chat[chat_id]}
+            for message in sorted(by_chat[chat_id], key=lambda m: m["id"]):
+                parent = theirs.get(summaries.replied_id(message)) \
+                    or replied.get((chat_id, summaries.replied_id(message)))
+                if parent is not None and parent["id"] not in theirs:
+                    text = self._claim_text(parent)[:CLAIM_CTX_CHARS]
+                    lines.append(f"[ctx] {message_stamp(parent.get('date', 0))} "
+                                 f"{self._sender_name(parent)}: {text}")
+                refs[len(refs) + 1] = message
+                lines.append(f"[m{len(refs)}] {message_stamp(message.get('date', 0))} "
+                             f"{self._sender_name(message)}: {self._claim_text(message)}")
+        return "\n".join(lines).strip(), refs
+
+    async def _get_messages(self, keys: list[tuple[int, int]]) -> list[dict[str, Any]]:
+        by_chat: dict[int, list[int]] = defaultdict(list)
+        for chat_id, message_id in keys:
+            by_chat[chat_id].append(message_id)
+        found: list[dict[str, Any]] = []
+        for chat_id, ids in by_chat.items():
+            try:
+                reply = await self._client.send({"@type": "getMessages", "chat_id": chat_id,
+                                                 "message_ids": ids[:200]})
+            except TdError as e:
+                log.info("getMessages(%s) failed: %s", chat_id, e)
+                continue
+            found += [m for m in reply.get("messages") or [] if m]
+        return found
+
+    def _claim_text(self, message: dict[str, Any]) -> str:
+        """One line for the model, without summary's "(reply to m<id>)": refs here are m<n>."""
+        return summaries.message_text({**message, "reply_to": None}, self._transcript_any)
+
+    def _verbatim(self, message: dict[str, Any]) -> str:
+        body = message_body(message.get("content") or {}) or {}
+        return body.get("text") or self._claim_text(message)
+
+    def _titles(self, chat_ids: list[int]) -> tuple[str, ...]:
+        return tuple(c.title for i in chat_ids if (c := self._chats.chats.get(i)) is not None)
+
+    def _set_claim(self, key: ClaimKey, value: ClaimCheck) -> None:
+        self._claims[key] = value
+        self._emit("claim", key)
+
     # --- internals --------------------------------------------------------------------------
 
     def _check(self, chat_id: int) -> None:
@@ -1193,6 +1437,11 @@ class AiService:
         if self._router is not None:
             await self._router.aclose()
         self._store.close()
+
+
+def _same_sender(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    return (a.get("@type") == b.get("@type")
+            and (a.get("user_id") or a.get("chat_id")) == (b.get("user_id") or b.get("chat_id")))
 
 
 def _json(text: str) -> dict[str, Any]:

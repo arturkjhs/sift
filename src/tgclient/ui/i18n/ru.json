@@ -493,5 +493,22 @@
 "In all common chats": "Во всех общих чатах",
 "Chats searched: %1": "Просмотрено чатов: %1",
 "Chats searched: %1 of %2": "Просмотрено чатов: %1 из %2",
-"More": "Ещё"
+"More": "Ещё",
+"Confirmed": "Подтверждается",
+"Contradicted": "Опровергается",
+"Partly": "Частично",
+"Not found": "Не найдено",
+"Check": "Проверить",
+"Check what %1 said": "Что говорил(а) %1",
+"Check what %1 said…": "Проверить, что говорил(а) %1…",
+"Check what they said…": "Проверить, что говорил(а)…",
+"What did %1 say?": "Что сказал(а) %1?",
+"Only chats with AI on are checked": "Проверяются только чаты с включённым AI",
+"Checked in this chat (AI must be on)": "Проверка в этом чате (нужен включённый AI)",
+"Not found in %1 messages (%2) in %3.": "Не найдено в %1 сообщениях (%2) в %3.",
+"No messages from %1 to check in %2.": "Нет сообщений %1 для проверки в %2.",
+"This doesn't prove it was never said.": "Это не доказывает, что этого не говорилось.",
+"contradicts": "опровергает",
+"supports": "подтверждает",
+"Not checked (AI is off there): %1 chats": "Не проверено (AI выключен): чатов — %1"
 }

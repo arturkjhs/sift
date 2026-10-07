@@ -203,6 +203,10 @@ class Session:
         self.sender_picker = SenderPicker(self.client, self.chats, self.users)
         self.ai_service.searcher = lambda query, chat_id: self.search_service.search(
             query, chat_id, limit=30)
+        self.ai_service.sender_searcher = lambda query, sender: self.search_service.search(
+            query, sender=sender, limit=40)
+        self.ai_service.person_search = self.person_search
+        self.person_messages.use_ai(self.ai_service)
         self.sticker_store = StickerStore(self.client, self.files)
         self.stickers = StickerModel(self.sticker_store, self.files)
         self.gifs = GifModel(self.client, self.files)

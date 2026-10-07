@@ -137,6 +137,24 @@ SplitView {
                     color: Theme.textMuted
                     font.pixelSize: Theme.fontSmall
                 }
+                IconButton {
+                    objectName: "globalClaimButton"
+                    visible: search.sender.startsWith("user:")
+                    iconName: "sparkle"
+                    glyphSize: 13
+                    implicitWidth: 26
+                    implicitHeight: 26
+                    Accessible.name: qsTr("Check what %1 said…").arg(search.senderName)
+                    // in all chats in common; from the open chat, or from the private one
+                    onClicked: {
+                        const chatId = root.selectedChatId !== 0 ? root.selectedChatId
+                                                                  : Number(search.sender.slice(5))
+                        if (chatId !== root.selectedChatId)
+                            root.openChat(chatId, 0)
+                        messageView.checkPersonClaimEverywhere(chatId, search.sender,
+                                                               search.senderName)
+                    }
+                }
                 Text {
                     objectName: "globalCoverage"
                     Layout.fillWidth: true

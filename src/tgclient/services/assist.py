@@ -511,6 +511,86 @@ def cache_key(model: str, messages: list[dict[str, Any]], extra: str = "") -> st
     return hashlib.sha256(blob.encode()).hexdigest()
 
 
+# --- "Check what <name> said" ---------------------------------------------------------------
+
+CLAIM_PROMPT = """\
+You check a claim about what one person (the subject) said in Telegram chats, for the reader.
+Judge only from the subject's messages in the input.
+
+Input: the claim, then messages formatted `[m<n>] <time> <sender>: <text>`, grouped by chat.
+Only [m<n>] lines are the subject's messages and only they can be evidence. Lines starting with
+`[ctx]` are the messages they replied to: context only, never evidence.
+
+Rules:
+- Only what was said. Never guess intent, motives or feelings.
+- A paraphrase counts, but say in the explanation that it was worded differently.
+- If a matching message is a joke, sarcasm or irony, say so in the explanation.
+- If the subject said it and later took it back (or the other way round), the verdict is
+  "partly" and the explanation says what changed.
+- No matching messages: "not_found". Don't stretch unrelated messages to fit.
+
+Output only JSON, no code fences:
+{"verdict": "confirmed" | "contradicted" | "partly" | "not_found",
+ "explanation": "1-3 sentences in {language}",
+ "evidence": [{"id": "m<n>", "relation": "supports" | "contradicts"}]}
+At most 5 evidence items, the most telling first. Empty list for "not_found".
+"""
+
+VERDICTS = ("confirmed", "contradicted", "partly", "not_found")
+RELATIONS = ("supports", "contradicts")
+MAX_EVIDENCE = 5
+_CLAIM_WORD = re.compile(r"\w{4,}", re.UNICODE)
+
+
+def claim_prompt(subject: str, reader: str, claim: str, lines: str,
+                 language: str = "en") -> list[dict[str, Any]]:
+    return system_user(_lang(CLAIM_PROMPT, language),
+                       f"{summary.today_header()}\nSubject: {subject}\n"
+                       f"Reader: {reader or 'unknown'}\nClaim: {claim}\n\n{lines}")
+
+
+def normalize_claim(claim: str) -> str:
+    """The same claim typed again (case, spaces, final punctuation) hits the same cache."""
+    return " ".join(claim.lower().split()).rstrip(".!?…")
+
+
+def claim_keywords(claim: str, limit: int = 3) -> list[str]:
+    """Words for the server search: the longest ones, cut by two letters (a crude stem: Slavic
+    endings change, and Telegram matches words by prefix)."""
+    words = sorted(dict.fromkeys(w.lower() for w in _CLAIM_WORD.findall(claim)),
+                   key=len, reverse=True)
+    return [w[:-2] if len(w) > 5 else w for w in words[:limit]]
+
+
+@dataclass(frozen=True)
+class ClaimVerdict:
+    verdict: str
+    explanation: str
+    evidence: list[tuple[int, str]]  # (index n of [m<n>], relation)
+
+
+def parse_claim(text: str) -> ClaimVerdict:
+    """The model's JSON; anything malformed reads as not_found without evidence."""
+    match = re.search(r"\{.*\}", text, re.DOTALL)
+    try:
+        data = json.loads(match.group(0)) if match else {}
+    except ValueError:
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    verdict = data.get("verdict") if data.get("verdict") in VERDICTS else "not_found"
+    evidence: list[tuple[int, str]] = []
+    for item in data.get("evidence") or []:
+        if not isinstance(item, dict):
+            continue
+        # only "m<n>": a bare number may be a Telegram message id that happens to equal some n
+        ref = re.fullmatch(r"\s*m(\d+)\s*", str(item.get("id", "")))
+        relation = item.get("relation") if item.get("relation") in RELATIONS else "supports"
+        if ref and all(int(ref.group(1)) != n for n, _ in evidence):
+            evidence.append((int(ref.group(1)), relation))
+    return ClaimVerdict(verdict, str(data.get("explanation") or "").strip(), evidence)
+
+
 # --- one message: explain it, suggest replies ------------------------------------------------
 
 NO_GUESSING = """\

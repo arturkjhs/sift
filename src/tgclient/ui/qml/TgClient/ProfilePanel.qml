@@ -16,6 +16,7 @@ Rectangle {
     signal searchRequested()
     signal addMembersRequested(var chatId)
     signal personMessagesRequested(var chatId, string senderKey, string name)
+    signal claimCheckRequested(var chatId, string senderKey, string name)
 
     // My role in the group or channel (owner / admin / member / ""), and its invite link.
     readonly property string myRole: (groupAdmin.revision, profile.isUser ? ""
@@ -423,6 +424,7 @@ Rectangle {
                     Repeater {
                         model: [
                             { key: "messages", label: qsTr("Messages") },
+                            { key: "check", label: qsTr("Check what they said…") },
                             { key: "media", label: qsTr("Media") },
                             { key: "files", label: qsTr("Files") },
                             { key: "links", label: qsTr("Links") },
@@ -431,16 +433,24 @@ Rectangle {
                         PillButton {
                             required property var modelData
                             text: modelData.label
-                            visible: modelData.key !== "messages" || profile.isUser
+                            visible: (modelData.key !== "messages" && modelData.key !== "check")
+                                     || profile.isUser
                             filled: profile.tab === modelData.key
                             // Messages: the person's own messages, in the side panel; in a
                             // group, there; otherwise in the private chat.
-                            onClicked: modelData.key === "messages"
-                                ? root.personMessagesRequested(
-                                      messages.chatType === "group" || messages.chatType === "supergroup"
-                                      ? messages.chatId : profile.chatId,
-                                      "user:" + profile.userId, profile.title)
-                                : profile.setTab(modelData.key)
+                            onClicked: {
+                                const chatId = messages.chatType === "group"
+                                               || messages.chatType === "supergroup"
+                                               ? messages.chatId : profile.chatId
+                                if (modelData.key === "messages")
+                                    root.personMessagesRequested(chatId, "user:" + profile.userId,
+                                                                 profile.title)
+                                else if (modelData.key === "check")
+                                    root.claimCheckRequested(chatId, "user:" + profile.userId,
+                                                             profile.title)
+                                else
+                                    profile.setTab(modelData.key)
+                            }
                         }
                     }
                 }

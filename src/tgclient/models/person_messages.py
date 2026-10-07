@@ -1,8 +1,9 @@
 """Qt model of one sender's messages ("Messages from <name>"): in the open chat, newest first,
 paged as the list scrolls; with a query, only matches (highlighted). With "In all common
 chats" (people only): the groups in common and the private chat, each with its first page,
-grouped under a header per chat (newest chat first), more per chat on request. Exposed to
-QML as `personMessages`.
+grouped under a header per chat (newest chat first), more per chat on request. Also "Check
+what <name> said…": a claim checked by AI in the same scope (AiService.check_claim; only
+chats with AI on are checked). Exposed to QML as `personMessages`.
 Rows: {kind: "message" | "header", chatId, messageId, chatTitle, topic, time, text, more}."""
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ from PySide6.QtCore import (
     Slot,
 )
 
+from ..services.ai import AiService, ClaimCheck, ClaimKey
 from ..services.person_search import ChatResults, PersonSearch
 from ..services.summary import sender_object
 from ..store.chats import ChatStore
@@ -53,6 +55,7 @@ class Role(IntEnum):
 
 class PersonMessagesModel(QAbstractListModel):
     changed = Signal()
+    checkChanged = Signal()
 
     def __init__(self, search: PersonSearch, chats: ChatStore, users: UserStore,
                  forums: ForumStore | None = None, parent: Any = None) -> None:
@@ -75,6 +78,15 @@ class PersonMessagesModel(QAbstractListModel):
         self._color = "#553FB295"
         self._tasks: set[asyncio.Task[Any]] = set()
         self._typing: asyncio.Task[Any] | None = None
+        self._common: list[int] | None = None  # the person's chats in common, once known
+        self._ai: AiService | None = None
+        self._claim_key: ClaimKey | None = None
+        self._check = ClaimCheck("")
+        self._check_task: asyncio.Task[Any] | None = None
+
+    def use_ai(self, ai: AiService) -> None:
+        self._ai = ai
+        ai.subscribe(self._on_ai)
 
     # --- QML API ----------------------------------------------------------------------------
 
@@ -86,6 +98,8 @@ class PersonMessagesModel(QAbstractListModel):
         self._chat_id, self._sender, self._name = int(chat_id or 0), sender, name
         self._query = ""
         self._all_chats = self._all_chats and sender.startswith("user:")
+        self._common = None
+        self._show_check(None)
         self._restart()
 
     @Property(str, notify=changed)
@@ -173,6 +187,100 @@ class PersonMessagesModel(QAbstractListModel):
         """The chats searched now (for the AI check) and the open one."""
         return (sorted(self._groups) if self._all_chats else [self._chat_id]), self._chat_id
 
+    # --- "Check what <name> said" -----------------------------------------------------------
+
+    @Slot(str)
+    def check(self, claim: str) -> None:
+        """Check the claim in the current scope: this chat, or all chats in common."""
+        if self._ai is not None and claim.strip() and self._sender:
+            # not with the search tasks: a new search query must not cancel it
+            self._check_task = asyncio.ensure_future(self._start_check(self._sender, claim))
+            self._check_task.add_done_callback(self._done)
+
+    async def _start_check(self, sender: str, claim: str) -> None:
+        assert self._ai is not None
+        if self._all_chats:
+            if self._common is None:
+                self._common = await self._search.common_chats(
+                    int(self._sender.split(":", 1)[1]))
+            chat_ids = list(self._common)
+        else:
+            chat_ids = [self._chat_id]
+        if sender == self._sender:  # still the same person
+            self._show_check(self._ai.check_claim(self._sender, self._name, chat_ids,
+                                                  self._chat_id, claim))
+
+    @Slot()
+    def clearCheck(self) -> None:
+        self._show_check(None)
+
+    @Property(str, notify=checkChanged)
+    def checkState(self) -> str:
+        return self._check.state
+
+    @Property(str, notify=checkChanged)
+    def claim(self) -> str:
+        return self._check.claim
+
+    @Property(str, notify=checkChanged)
+    def verdict(self) -> str:
+        return self._check.verdict
+
+    @Property(str, notify=checkChanged)
+    def explanation(self) -> str:
+        return self._check.explanation
+
+    @Property(str, notify=checkChanged)
+    def checkError(self) -> str:
+        return self._check.error
+
+    @Property("QVariantList", notify=checkChanged)
+    def quotes(self) -> list[dict[str, Any]]:
+        """Evidence from the TDLib messages (date, chat, the text as written)."""
+        return [{"chatId": q.chat_id, "messageId": q.message_id, "chatTitle": q.chat_title,
+                 "time": message_stamp(q.date) if q.date else "",
+                 "text": html.escape(q.text).replace("\n", "<br>"),
+                 "relation": q.relation} for q in self._check.quotes]
+
+    @Property(int, notify=checkChanged)
+    def checkedCount(self) -> int:
+        return self._check.count
+
+    @Property(str, notify=checkChanged)
+    def checkedPeriod(self) -> str:
+        c = self._check
+        if not c.since:
+            return ""
+        since, until = message_stamp(c.since), message_stamp(c.until)
+        return since if since == until else f"{since} – {until}"
+
+    @Property(str, notify=checkChanged)
+    def checkedChats(self) -> str:
+        titles = self._check.chats
+        return ", ".join(titles[:3]) + (f" +{len(titles) - 3}" if len(titles) > 3 else "")
+
+    @Property(int, notify=checkChanged)
+    def skippedChats(self) -> int:
+        return self._check.skipped
+
+    @Property(str, notify=checkChanged)
+    def checkCost(self) -> str:
+        return f"${self._check.cost:.4f}" if self._check.cost else ""
+
+    @Property(str, notify=checkChanged)
+    def checkModel(self) -> str:
+        return self._check.model
+
+    def _show_check(self, key: ClaimKey | None) -> None:
+        self._claim_key = key
+        found = self._ai.claim_check(key) if self._ai is not None and key else None
+        self._check = found or ClaimCheck("")
+        self.checkChanged.emit()
+
+    def _on_ai(self, kind: str, payload: Any) -> None:
+        if kind == "claim" and payload == self._claim_key:
+            self._show_check(payload)
+
     @Slot("QVariant")
     def loadMoreIn(self, chat_id: Any) -> None:
         group = self._groups.get(int(chat_id or 0))
@@ -224,6 +332,7 @@ class PersonMessagesModel(QAbstractListModel):
         try:
             user_id = int(self._sender.split(":", 1)[1])
             chat_ids = await self._search.common_chats(user_id)
+            self._common = chat_ids
             if generation != self._generation:
                 return
             self._chats_total = len(chat_ids)

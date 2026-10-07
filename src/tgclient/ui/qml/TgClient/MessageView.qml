@@ -20,6 +20,20 @@ Item {
         root.personMessagesOpen = true
     }
 
+    // "Check what <name> said…": the same panel, on its Check tab.
+    function checkPersonClaim(chatId, senderKey, name) {
+        personMessages.open(chatId, senderKey, name)
+        root.personMessagesOpen = true
+        personPanel.startCheck()
+    }
+
+    function checkPersonClaimEverywhere(chatId, senderKey, name) {
+        personMessages.open(chatId, senderKey, name)
+        personMessages.allChats = true
+        root.personMessagesOpen = true
+        personPanel.startCheck()
+    }
+
     // The same, in every chat in common with them, already filtered by `query`.
     function showPersonMessagesEverywhere(chatId, senderKey, name, query) {
         personMessages.open(chatId, senderKey, name)
@@ -380,6 +394,15 @@ Item {
                                                         : messages.searchOlder()
                 }
                 // From: a person — the same search over every chat in common, in the side panel
+                IconButton {
+                    objectName: "chatClaimButton"
+                    visible: messages.chatSearchSender !== ""
+                    iconName: "sparkle"
+                    glyphSize: 15
+                    Accessible.name: qsTr("Check what %1 said…").arg(messages.chatSearchSenderName)
+                    onClicked: root.checkPersonClaim(messages.chatId, messages.chatSearchSender,
+                                                     messages.chatSearchSenderName)
+                }
                 PillButton {
                     objectName: "allChatsButton"
                     visible: messages.chatSearchSender.startsWith("user:")
@@ -668,6 +691,8 @@ Item {
                 onAddMembersRequested: chatId => addMembersDialog.start("add", chatId)
                 onPersonMessagesRequested: (chatId, senderKey, name) =>
                                            root.showPersonMessages(chatId, senderKey, name)
+                onClaimCheckRequested: (chatId, senderKey, name) =>
+                                       root.checkPersonClaim(chatId, senderKey, name)
             }
 
             Rectangle {
@@ -1845,6 +1870,13 @@ Item {
             iconName: "search"
             onTriggered: root.showPersonMessages(messages.chatId, personMenu.senderKey,
                                                  personMenu.senderName)
+        }
+        AppMenuItem {
+            objectName: "checkClaimItem"
+            text: qsTr("Check what %1 said…").arg(personMenu.senderName)
+            iconName: "sparkle"
+            onTriggered: root.checkPersonClaim(messages.chatId, personMenu.senderKey,
+                                               personMenu.senderName)
         }
         AppMenuItem {
             objectName: "viewProfileItem"
