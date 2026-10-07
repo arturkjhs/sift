@@ -82,24 +82,29 @@ impression of the chat.
 
 PERSON_PROMPT = """\
 You write a short profile of one participant of a Telegram chat for another participant
-(the reader), based only on that person's own messages in this chat.
+(the reader): what the person is useful to know about, not who they are.
 
-Input: their messages, one per line, formatted `[m<id>] <time> <name>: <text>`.
+Input: the person's messages in this chat, one per line, formatted
+`[m<id>] <marks> <time> <name>: <text>`. Lines marked `(you)` are the reader's own messages
+the person replied to or that reply to the person; `↩you` is the person replying to the
+reader, `@you` the person mentioning the reader. The header lists them under "Between you".
 
 Rules:
 - Write in {language}, whatever language the messages are in.
 - Markdown: `##` sections with short bullet points, headings written exactly as given (the
   part in parentheses says what goes in, never copy it); skip a section the messages say
   nothing about:
-  ## {H:who} (role, work, place, background they mention)
-  ## {H:topics}
-  ## {H:knows}
-  ## {H:plans} (with dates)
-  ## {H:style}
+  ## {H:topics} (what they write about here, most frequent first)
+  ## {H:knows} (what they know well, judging by their answers and advice, and what the
+  reader could ask them for)
+  ## {H:between} (questions between them and the reader, open agreements and promises,
+  with dates; only from the lines listed under "Between you", skip the section when that
+  list is "none")
 - After every bullet cite the messages it is based on as [m<id>] or [m<id>, m<id>]: at most
   2, the most telling ones first. Use only ids that appear in the input.
-- Only facts the person stated or that clearly follow from their messages. Do not guess,
-  and do not infer sensitive traits (health, religion, ethnicity, sexuality, political views).
+- Only facts the person stated or that clearly follow from their messages. Do not guess, do
+  not describe their role, job, origin or character, and do not infer sensitive traits
+  (health, religion, ethnicity, sexuality, political views).
 - No preamble, no closing remarks.
 """
 
@@ -199,9 +204,11 @@ def render(
     transcript: Callable[[Message], str | None],
     now: datetime | None = None,
     reader: Reader | None = None,
+    own_concerns: bool = False,
 ) -> tuple[str, Source]:
     """Messages (oldest first) -> prompt text, lines marked for `reader` if given. Keeps the
-    newest ones if it gets too long."""
+    newest ones if it gets too long. `own_concerns`: the reader's own lines also go to
+    `Source.for_you` (a person profile, where they are the reader's side of an exchange)."""
     lines: list[tuple[int, str]] = []
     times: dict[int, int] = {}
     senders: dict[int, str] = {}
@@ -212,7 +219,7 @@ def render(
         if not line:
             continue
         marks = reader_marks(message, reader) if reader else ""
-        if marks and marks != "(you)":
+        if marks and (own_concerns or marks != "(you)"):
             concerning.add(message["id"])
         lines.append((message["id"], f"[m{message['id']}] {marks + ' ' if marks else ''}{line}"))
         times[message["id"]] = message.get("date", 0)
@@ -313,9 +320,11 @@ def prompt(chat_title: str, reader: str, transcript_text: str,
 
 
 def person_prompt(chat_title: str, name: str, reader: str,
-                  transcript_text: str, language: str = "en") -> list[dict[str, Any]]:
+                  transcript_text: str, language: str = "en",
+                  between: tuple[int, ...] = ()) -> list[dict[str, Any]]:
+    listed = ", ".join(f"m{i}" for i in between) or "none"
     header = (f"{today_header()}\nChat: {chat_title}\nPerson: {name or 'unknown'}\n"
-              f"Reader: {reader or 'unknown'}\n\n")
+              f"Reader: {reader or 'unknown'}\nBetween you: {listed}\n\n")
     return [
         {"role": "system", "content": _localize(PERSON_PROMPT, language)},
         {"role": "user", "content": header + transcript_text},

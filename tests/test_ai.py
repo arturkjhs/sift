@@ -324,7 +324,7 @@ class AiServiceTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_person_summary_uses_only_their_messages(self) -> None:
         self.ai.set_enabled(CHAT, True)
-        self.router.reply = "## Who they are\n- Backend dev [m9, m2]"
+        self.router.reply = "## What they know and can help with\n- Backend [m9, m2]"
         self.ai.summarize_person(CHAT, "user:5", "Olena")
         self.assertEqual(self.ai.summary(CHAT, "user:5").state, "pending")
         self.assertEqual(self.ai.summary(CHAT).state, "")  # the chat summary is separate

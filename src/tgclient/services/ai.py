@@ -58,6 +58,7 @@ DIGEST_DEFAULT_HOURS = 24
 DIGEST_MAX_DAYS = 7
 DIGEST_CHAT_MESSAGES = 300
 PROMISE_DAYS = 14
+OWN_FOR_PERSON = 300  # own messages searched for replies to the person
 ANSWER_WINDOW_SECONDS = 3 * 86400
 SMALL_GROUP = 30  # members: up to this, everyone counts as asked
 CONTEXT_AROUND = 20  # messages before and after the one explained / replied to
@@ -571,16 +572,34 @@ class AiService:
     async def _run_person(self, chat_id: int, sender: str, name: str) -> _Result:
         chat = self._chats.chats[chat_id]
         messages, truncated = await summaries.collect_from_sender(self._client, chat_id, sender)
-        text, source = self._render(chat_id, messages)
+        if not messages:
+            raise AiUnavailable("No messages from this person here")
+        # The reader's side of their exchanges: own messages the person replied to and own
+        # replies to the person. The section about them is kept by code, not by the model.
+        me = self._users.my_id or 0
+        reader, replied = await self._marks_and_replied(chat_id, messages)
+        theirs = {m["id"] for m in messages}
+        exchange = [m for m in replied if m["id"] not in theirs]
+        if me and sender != f"user:{me}":
+            mine, _ = await summaries.collect_from_sender(
+                self._client, chat_id, f"user:{me}", limit=OWN_FOR_PERSON)
+            exchange += [m for m in mine if summaries.replied_id(m) in theirs]
+        merged = {m["id"]: m for m in exchange + messages}
+        text, source = summaries.render(
+            [merged[i] for i in sorted(merged)], self._sender_name,
+            self._transcript_of(chat_id), reader=reader, own_concerns=True)
         if not source.count:
             raise AiUnavailable("No messages from this person here")
         self._check(chat_id)
+        heading = assist.word(self.translate_to, "between")
         reply = await self._complete(
             chat_id, "person", self.summary_model,
             summaries.person_prompt(chat.title, name, self._reader(), text,
-                                    self.translate_to))
-        return _Result(summaries.linkify(assist.clean_headings(reply.text), source), reply.cost,
-                       source.count, truncated or source.truncated)
+                                    self.translate_to, source.for_you))
+        text = summaries.keep_for_you(assist.clean_headings(reply.text), heading,
+                                      source.for_you)
+        return _Result(summaries.linkify(text, source), reply.cost, source.count,
+                       truncated or source.truncated)
 
     async def _run_ask(self, chat_id: int, question: str) -> _Result:
         chat = self._chats.chats[chat_id]
@@ -1069,23 +1088,28 @@ class AiService:
         return me.full_name
 
     async def _marks_for(self, chat_id: int, messages: list[Any]) -> summaries.Reader:
+        return (await self._marks_and_replied(chat_id, messages))[0]
+
+    async def _marks_and_replied(self, chat_id: int, messages: list[Any]
+                                 ) -> tuple[summaries.Reader, list[Any]]:
         """What marks the summary input as concerning the user: their id, @usernames and own
         messages, including older ones that messages in the slice reply to (asked from TDLib,
-        nothing is sent anywhere)."""
+        nothing is sent anywhere). Also returns those older own messages."""
         me = self._users.my_id or 0
         own = {m["id"] for m in messages if summaries.is_own(m, me)}
         known = {m["id"] for m in messages}
         missing = sorted({r for m in messages if (r := summaries.replied_id(m)) and r not in known})
+        replied: list[Any] = []
         if missing:
             try:
                 found = await self._client.send({"@type": "getMessages", "chat_id": chat_id,
                                                  "message_ids": missing[:200]})
-                own.update(m["id"] for m in found.get("messages") or []
-                           if m and summaries.is_own(m, me))
+                replied = [m for m in found.get("messages") or [] if m and summaries.is_own(m, me)]
+                own.update(m["id"] for m in replied)
             except TdError as e:
                 log.info("getMessages for replied messages failed: %s", e)
         user = self._users.me
-        return summaries.Reader(me, user.usernames if user else (), frozenset(own))
+        return summaries.Reader(me, user.usernames if user else (), frozenset(own)), replied
 
     def _emit(self, kind: ChangeKind, payload: Any) -> None:
         for listener in list(self._listeners):

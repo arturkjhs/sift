@@ -403,7 +403,7 @@ class AssistServiceTest(AssistCase):
                 self.assertNotIn("{H:", text)
                 self.assertNotIn("{language}", text)
             self.assertIn("## " + assist.word(code, "unclear") + "\n", prompts[0])
-            self.assertIn("## " + assist.word(code, "who"), prompts[4])
+            self.assertIn("## " + assist.word(code, "between"), prompts[4])
         uk = assist.explain_prompt(context, "uk")[0]["content"]
         self.assertNotIn("## Unclear", uk)
         self.assertIn("| Хто | Позиція | Відповідь |",
@@ -649,6 +649,36 @@ class AssistServiceTest(AssistCase):
         self.assertIn("Reader: Me (@me_user)", user)
         self.assertIn("Period: unread messages", user)
         self.assertIn("For the reader: m73, m74, m75\n", user)
+
+    async def test_person_profile_keeps_between_you_by_markers(self) -> None:
+        self.replies["profile of one participant"] = (
+            "## What they write about\n- Meetups [m3]\n\n"
+            "## Between you\n- Agreed on Friday 18:00 [m4, m5]\n- Said hi [m1]\n")
+        self.ai.summarize_person(CHAT, "user:5", "Olena")
+        result = await self.done(CHAT, "user:5")
+        self.assertEqual(result.state, "done", result.error)
+        system, user = (m["content"] for m in self.router.requests[0]["messages"])
+        for gone in ("Who they are", "How they communicate", "role, work"):
+            self.assertNotIn(gone, system)
+        self.assertIn("## What they know and can help with", system)
+        lines = {line.split()[0]: line for line in user.splitlines() if line.startswith("[m")}
+        # her messages plus my message she replied to; Petr's m2 is not hers
+        self.assertEqual(sorted(lines), ["[m1]", "[m3]", "[m4]", "[m5]"])
+        self.assertIn("[m4] (you) ", lines["[m4]"])
+        self.assertIn("[m5] ↩you ", lines["[m5]"])
+        self.assertIn("Between you: m4, m5\n", user)
+        self.assertIn("Agreed on Friday", result.text)
+        self.assertNotIn("Said hi", result.text)  # cites nothing between them
+        self.assertEqual(result.count, 4)
+
+    async def test_person_profile_without_exchange_drops_between_you(self) -> None:
+        self.replies["profile of one participant"] = (
+            "## What they write about\n- Contracts [m2]\n\n## Between you\n- Shares files [m2]")
+        self.ai.summarize_person(CHAT, "user:6", "Petr")
+        result = await self.done(CHAT, "user:6")
+        self.assertIn("Between you: none\n", self.router.requests[0]["messages"][1]["content"])
+        self.assertNotIn("Between you", result.text)
+        self.assertIn("Contracts", result.text)
 
     def test_summary_prompt_asks_for_conclusions(self) -> None:
         system = summary.prompt("Team", "Me", "[m1] 10:00 Ann: hi", "uk")[0]["content"]
