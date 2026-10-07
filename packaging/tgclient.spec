@@ -109,6 +109,9 @@ if sys.platform == "darwin":
             # Asked when the user records a voice message for the first time.
             "NSMicrophoneUsageDescription": "tgclient records voice messages when you press "
                                             "the microphone button.",
+            # Asked when the user records a video message (a round one) for the first time.
+            "NSCameraUsageDescription": "tgclient records video messages when you choose "
+                                        "Video message.",
             "LSApplicationCategoryType": "public.app-category.social-networking",
         },
     )

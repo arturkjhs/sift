@@ -79,6 +79,6 @@ Drafts and pre-releases are ignored, and `dev` builds never report updates.
 PyAV brings its own FFmpeg with libopus (Qt's FFmpeg can't encode Opus, which Telegram voice
 notes need) and libvpx (video stickers keep their alpha only with libvpx-vp9). PyAV 15.1 is
 pinned: newer macOS arm64 wheels need macOS 14. rlottie-python renders TGS stickers, segno
-draws login QR codes. `NSMicrophoneUsageDescription` in Info.plist is required for recording
+draws login QR codes. `NSMicrophoneUsageDescription` (and `NSCameraUsageDescription` for video messages) in Info.plist is required for recording
 on macOS; the Flatpak's `--socket=pulseaudio` covers the microphone on Linux.
 `tgclient --self-test` checks the codecs ("media codecs").

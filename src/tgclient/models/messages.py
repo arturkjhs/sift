@@ -1478,6 +1478,20 @@ class MessageListModel(QAbstractListModel):
         }
         self._spawn(self._send_content(chat_id, content, reply_to))
 
+    def send_video_note_to(self, chat_id: int, path: str, duration: int, length: int,
+                           reply_to: int = 0) -> None:
+        """A recorded video message (square MP4) to the chat it was recorded in."""
+        if self._history is not None and self._history.chat_id == chat_id:
+            self._clear_unread_separator()
+        content = {
+            "@type": "inputMessageVideoNote",
+            "video_note": {"@type": "inputVideoNote",
+                           "video_note": {"@type": "inputFileLocal", "path": path},
+                           "thumbnail": None, "duration": duration, "length": length},
+            "self_destruct_type": None,
+        }
+        self._spawn(self._send_content(chat_id, content, reply_to))
+
     def send_file(self, path: str, caption: str = "", reply_to: int = 0) -> None:
         self.send_files([(path, caption, reply_to)])
 

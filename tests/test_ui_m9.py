@@ -199,6 +199,24 @@ class M9ViewsTest(unittest.IsolatedAsyncioTestCase):
         session.recorder._state = "idle"
         session.recorder.changed.emit()
 
+        # recording a video message (no camera offscreen: a frame is fed directly)
+        from PySide6.QtGui import QColor, QImage
+
+        session.video_recorder._started = time.monotonic() - 12
+        session.video_recorder._state = "recording"
+        camera_frame = QImage(640, 480, QImage.Format.Format_RGB32)
+        camera_frame.fill(QColor("#6C7F99"))
+        session.video_recorder.add_frame(camera_frame)
+        session.video_recorder.changed.emit()
+        await settle(0.2)
+        preview = next(i for i in _all_items(window.contentItem())
+                       if i.objectName() == "videoPreview")
+        self.assertTrue(preview.isVisible())
+        _screenshot(window, "m9-video-note")
+        session.video_recorder._state = "idle"
+        session.video_recorder._frames = []
+        session.video_recorder.changed.emit()
+
         # the update banner
         updates = engine._tgclient_refs[5]
         from tgclient.services.updates import Release

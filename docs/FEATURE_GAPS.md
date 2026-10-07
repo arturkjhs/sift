@@ -188,7 +188,8 @@
 - [x] Анимированные стикеры (rlottie для TGS, WebM через QtMultimedia), GIF с автоплеем,
   кастомные эмодзи (`getCustomEmojiStickers`).
   → M9: `ui/animation.py`, `store/custom_emoji.py` (анимированные кастомные эмодзи — первым кадром).
-- [ ] Поиск и отправка GIF, создание опросов, запись кружков.
+- [x] Поиск и отправка GIF, создание опросов, запись кружков.
+  → `models/gifs.py` (вкладка GIFs, @gif), `PollEditor.qml` + `messages.sendPoll`, `ui/video_note.py` (камера → H.264/AAC MP4).
 - [ ] Контакты: список, поиск, добавление.
 - [ ] Создание групп и каналов, инвайт-ссылки, базовая админка (права, бан, удаление).
 - [ ] Настройки приватности (`getUserPrivacySettingRules` / `setUserPrivacySettingRules`),

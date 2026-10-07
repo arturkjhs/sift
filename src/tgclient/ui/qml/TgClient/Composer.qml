@@ -272,6 +272,52 @@ Rectangle {
             }
         }
 
+        // Recording a video message: the round preview is over the feed (MessageView).
+        RowLayout {
+            objectName: "videoRecordingBar"
+            Layout.fillWidth: true
+            visible: videoRecorder.busy
+            spacing: 10
+            Rectangle {
+                width: 10
+                height: 10
+                radius: 5
+                color: Theme.danger
+                SequentialAnimation on opacity {
+                    running: videoRecorder.recording
+                    loops: Animation.Infinite
+                    NumberAnimation { to: 0.3; duration: 600 }
+                    NumberAnimation { to: 1; duration: 600 }
+                }
+            }
+            Text {
+                Layout.fillWidth: true
+                text: videoRecorder.recording
+                      ? qsTr("Video message") + "  " + Math.floor(videoRecorder.seconds / 60) + ":"
+                        + (videoRecorder.seconds % 60 < 10 ? "0" : "") + videoRecorder.seconds % 60
+                        + " / 1:00"
+                      : qsTr("Sending\u2026")
+                color: Theme.text
+                font.pixelSize: Theme.fontTitle
+                font.features: { "tnum": 1 }
+            }
+            PillButton {
+                text: qsTr("Cancel")
+                enabled: videoRecorder.recording
+                onClicked: videoRecorder.cancel()
+            }
+            PillButton {
+                objectName: "sendVideoNote"
+                text: qsTr("Send")
+                filled: true
+                enabled: videoRecorder.recording
+                onClicked: {
+                    videoRecorder.finish()
+                    root.sent()
+                }
+            }
+        }
+
         Text {
             id: recorderError
             Layout.fillWidth: true
@@ -281,6 +327,10 @@ Rectangle {
             font.pixelSize: Theme.fontSmall
             Connections {
                 target: recorder
+                function onError(message) { recorderError.text = message }
+            }
+            Connections {
+                target: videoRecorder
                 function onError(message) { recorderError.text = message }
             }
             Timer {
@@ -488,7 +538,7 @@ Rectangle {
 
         RowLayout {
             Layout.fillWidth: true
-            visible: !recorder.busy
+            visible: !recorder.busy && !videoRecorder.busy
             spacing: 8
 
             IconButton {
@@ -659,6 +709,12 @@ Rectangle {
             text: qsTr("Poll")
             iconName: "summary"
             onTriggered: pollEditor.start()
+        }
+        AppMenuItem {
+            objectName: "videoMessageItem"
+            text: qsTr("Video message")
+            iconName: "play"
+            onTriggered: videoRecorder.start(messages.chatId, root.replyToId)
         }
     }
 

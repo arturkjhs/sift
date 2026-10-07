@@ -61,6 +61,8 @@ from .ui.notifications import Backend, NotificationController, default_backend
 from .ui.recorder import VoiceRecorder
 from .ui.shell import ShellController
 from .ui.updates import UpdateController
+from .ui.video_note import PreviewProvider as CameraPreview
+from .ui.video_note import VideoNoteRecorder
 from .ui.voice_player import VoicePlayer
 from .vault import SealedFile, Vault, database_exists, system_keyring
 
@@ -162,6 +164,8 @@ class Session:
         self.topics = TopicListModel(self.forums, self.chats, self.users, self.messages)
         self.viewer = ViewerModel(self.messages, self.files)
         self.recorder = VoiceRecorder(self.client, self.messages, settings.data_dir / "voice")
+        self.video_recorder = VideoNoteRecorder(self.client, self.messages,
+                                                settings.data_dir / "voice")
         self.composer = ComposerModel(self.client, self.chats, self.messages,
                                       settings.data_dir / "pasted")
         self.chat_picker = ChatPickerModel(self.chats, self.users)
@@ -365,6 +369,8 @@ def create_engine(
 
     qr = QrProvider()
     engine.addImageProvider("qr", qr)
+    camera = CameraPreview()
+    engine.addImageProvider("camera", camera)
     # Context properties don't own their objects: keep Python refs alive as long as the engine.
     updates = updates or UpdateController(None, session.prefs,
                                           build_info().get("VERSION", "dev"))
@@ -372,7 +378,7 @@ def create_engine(
     for each in accounts.sessions.values():
         each.notifications.notifier.private = lock.is_private
     engine._tgclient_refs = (  # type: ignore[attr-defined]
-        shell, images, icons, qr, accounts, updates, lock)
+        shell, images, icons, qr, accounts, updates, lock, camera)
     context = engine.rootContext()
     context.setContextProperty("shell", shell)
     context.setContextProperty("lock", lock)
@@ -422,6 +428,7 @@ def bind_session(engine: QQmlApplicationEngine, images: TdImageProvider,
     context.setContextProperty("notifications", session.notifications)
     context.setContextProperty("viewer", session.viewer)
     context.setContextProperty("recorder", session.recorder)
+    context.setContextProperty("videoRecorder", session.video_recorder)
 
 
 def _log_qml_warnings(messages: list[str]) -> None:

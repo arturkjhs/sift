@@ -65,7 +65,7 @@ def ensure_bundle(root: Path) -> Path:
     app = root / f"{APP_NAME}.app"
     executable = app / "Contents" / "MacOS" / APP_NAME
     stamp = json.dumps({"python": str(source), "mtime": source.stat().st_mtime,
-                        "icon": _ICON_SVG.stat().st_mtime, "version": 2})
+                        "icon": _ICON_SVG.stat().st_mtime, "version": 3})
     stamp_file = root / "stamp.json"
     if executable.exists() and stamp_file.exists() and stamp_file.read_text() == stamp:
         return executable
@@ -89,6 +89,8 @@ def ensure_bundle(root: Path) -> Path:
             "NSRequiresAquaSystemAppearance": False,
             "NSMicrophoneUsageDescription": "tgclient records voice messages when you press "
                                             "the microphone button.",
+            "NSCameraUsageDescription": "tgclient records video messages when you choose "
+                                        "Video message.",
         }, f)
     write_icns(contents / "Resources" / f"{APP_NAME}.icns")
     subprocess.run(["codesign", "--force", "--sign", "-", str(build)], check=True,

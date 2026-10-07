@@ -784,6 +784,38 @@ Item {
         }
     }
 
+    // The camera while recording a video message.
+    Rectangle {
+        objectName: "videoPreview"
+        visible: videoRecorder.busy
+        width: 264
+        height: 264
+        radius: width / 2
+        x: (list.width - width) / 2
+        anchors.bottom: parent.bottom
+        anchors.bottomMargin: composer.height + 24
+        color: Theme.popup
+        border.width: 3
+        border.color: videoRecorder.recording ? Theme.accent : Theme.popupBorder
+        Image {
+            anchors.fill: parent
+            anchors.margins: 3
+            source: videoRecorder.frame > 0 ? "image://camera/" + videoRecorder.frame : ""
+            sourceSize.width: 512
+            sourceSize.height: 512
+            cache: false
+        }
+        Rectangle {  // progress towards the minute
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: -14
+            width: parent.width * Math.min(1, videoRecorder.seconds / 60)
+            height: 4
+            radius: 2
+            color: Theme.accent
+        }
+    }
+
     // Short notices (a bot's answer to a button, "Copied").
     Rectangle {
         id: toast
