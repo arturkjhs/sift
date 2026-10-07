@@ -63,7 +63,7 @@ from ..store.reactions import (
     reaction_type,
     reactors_text,
 )
-from ..store.richtext import Palette, formatted_to_html
+from ..store.richtext import Palette, formatted_to_html, highlight_html
 from ..store.users import UserStore
 from ..td.client import TdClient, TdError
 
@@ -205,6 +205,8 @@ class MessageListModel(QAbstractListModel):
     selectionChanged = Signal()
     reactorsChanged = Signal()
     pinnedChanged = Signal()
+    chatSearchChanged = Signal()
+    chatSearchJump = Signal("QVariant")  # a search result to show (QML jumps and flashes)
 
     def __init__(
         self, client: TdClient, chats: ChatStore, users: UserStore,
@@ -226,6 +228,12 @@ class MessageListModel(QAbstractListModel):
         self._first_unread = 0  # message showing the "Unread messages" separator
         self._at_latest = True
         self._pinned: PinnedMessages | None = None
+        self._search_query = ""
+        self._search_ids: list[int] = []  # results, newest first
+        self._search_next = 0  # next_from_message_id for more results (0: no more)
+        self._search_index = -1
+        self._search_busy = False
+        self._search_color = "#553FB295"
         self._selected: set[int] = set()
         self._reactors: dict[tuple[int, str], list[str]] = {}  # (message, key) -> names
         self._reactors_asked: set[tuple[int, str]] = set()
@@ -390,6 +398,105 @@ class MessageListModel(QAbstractListModel):
                     index = self.index(each)
                     self.dataChanged.emit(index, index, [Role.Selected])
         self.selectionChanged.emit()
+
+    # --- search in the open chat -------------------------------------------------------------
+
+    @Property(str, notify=chatSearchChanged)
+    def chatSearchQuery(self) -> str:
+        return self._search_query
+
+    @Property(int, notify=chatSearchChanged)
+    def chatSearchCount(self) -> int:
+        return len(self._search_ids)
+
+    @Property(bool, notify=chatSearchChanged)
+    def chatSearchMore(self) -> bool:
+        """More (older) results can be loaded: the count is "N+"."""
+        return bool(self._search_next)
+
+    @Property(int, notify=chatSearchChanged)
+    def chatSearchIndex(self) -> int:
+        """1 = the newest result shown; 0 = none."""
+        return self._search_index + 1
+
+    @Property(bool, notify=chatSearchChanged)
+    def chatSearchBusy(self) -> bool:
+        return self._search_busy
+
+    def _get_search_color(self) -> str:
+        return self._search_color
+
+    def _set_search_color(self, value: str) -> None:
+        if value != self._search_color:
+            self._search_color = value
+            if self._search_query:
+                self._refresh_html()
+
+    searchHighlight = Property(str, _get_search_color, _set_search_color)
+
+    @Slot(str)
+    def searchInChat(self, query: str) -> None:
+        """Find messages in the open chat (or topic); jumps to the newest result."""
+        query = query.strip()
+        if query == self._search_query:
+            return
+        self._search_query = query
+        self._search_ids, self._search_next, self._search_index = [], 0, -1
+        self._refresh_html()
+        self.chatSearchChanged.emit()
+        history = self._history
+        if query and history is not None:
+            self._spawn(self._search_chat(history, query, 0))
+
+    @Slot()
+    def searchOlder(self) -> None:
+        if self._search_index + 1 < len(self._search_ids):
+            self._show_result(self._search_index + 1)
+        elif self._search_next and self._history is not None and not self._search_busy:
+            self._spawn(self._search_chat(self._history, self._search_query, self._search_next))
+
+    @Slot()
+    def searchNewer(self) -> None:
+        if self._search_index > 0:
+            self._show_result(self._search_index - 1)
+
+    @Slot()
+    def endChatSearch(self) -> None:
+        self.searchInChat("")
+
+    async def _search_chat(self, history: ChatHistory, query: str, from_id: int) -> None:
+        self._search_busy = True
+        self.chatSearchChanged.emit()
+        try:
+            found = await self._client.send({
+                "@type": "searchChatMessages", "chat_id": history.chat_id,
+                "topic_id": topic_obj(max(history.topic_id, 0)), "query": query,
+                "sender_id": None, "from_message_id": from_id, "offset": 0, "limit": 50,
+                "filter": None})
+        except TdError as e:
+            log.info("Search in chat failed: %s", e)
+            found = {}
+        finally:
+            self._search_busy = False
+        if history is not self._history or query != self._search_query:
+            return
+        fresh = [m["id"] for m in found.get("messages") or []
+                 if m and m["id"] not in self._search_ids]
+        self._search_ids.extend(fresh)
+        self._search_next = int(found.get("next_from_message_id") or 0) if fresh else 0
+        self.chatSearchChanged.emit()
+        if fresh:
+            self._show_result(self._search_index + 1)
+
+    def _show_result(self, index: int) -> None:
+        self._search_index = index
+        self.chatSearchChanged.emit()
+        self.chatSearchJump.emit(self._search_ids[index])
+
+    def _refresh_html(self) -> None:
+        self._html_cache = {}
+        if self.rowCount() > 0:
+            self.dataChanged.emit(self.index(0), self.index(self.rowCount() - 1), [Role.Html])
 
     # --- pinned messages ----------------------------------------------------------------------
 
@@ -618,7 +725,10 @@ class MessageListModel(QAbstractListModel):
         self._first_unread = 0
         self._selected = set()
         self._select_anchor = 0
+        self._search_query, self._search_ids, self._search_next = "", [], 0
+        self._search_index = -1
         self.endResetModel()
+        self.chatSearchChanged.emit()
         self.chatChanged.emit()
         self.statusChanged.emit()
         self.countersChanged.emit()
@@ -1572,8 +1682,12 @@ class MessageListModel(QAbstractListModel):
         body = message_body(message.get("content", {}))
         result = ""
         if body and body.get("text"):
-            result = formatted_to_html(body, self._palette, self._time_spacer(message),
+            # The time spacer goes in after highlighting (its digits must not match).
+            result = formatted_to_html(body, self._palette, _TAIL,
                                        self._emoji_callback(message["id"]))
+            if self._search_query:
+                result = highlight_html(result, self._search_query, self._search_color)
+            result = result.replace(_TAIL, self._time_spacer(message))
         self._html_cache[message["id"]] = result
         return result
 
@@ -1887,6 +2001,7 @@ class MessageListModel(QAbstractListModel):
         task.add_done_callback(_log_failure)
 
 
+_TAIL = "<!--time-->"
 _TELEGRAM_LINK = re.compile(r"^(?:tg:|(?:https?://)?(?:www\.)?(?:t\.me|telegram\.(?:me|dog))/)",
                             re.IGNORECASE)
 

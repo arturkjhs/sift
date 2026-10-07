@@ -113,6 +113,32 @@ Item {
         messages.jumpTo(messageId)
     }
 
+    function openSearch() {
+        chatSearch.visible = true
+        chatSearchBox.focusInput()
+    }
+
+    function closeSearch() {
+        chatSearch.visible = false
+        messages.endChatSearch()
+        composer.focusInput()
+    }
+
+    Connections {
+        target: messages
+        function onChatSearchJump(messageId) { root.showMessage(messageId) }
+        function onChatChanged() {  // another chat or topic: the search is over
+            const scope = messages.chatId + "/" + messages.topicId
+            if (scope !== chatSearch.scope) {
+                chatSearch.scope = scope
+                chatSearch.visible = false
+                chatSearchBox.text = ""
+            }
+        }
+    }
+    Binding { target: messages; property: "searchHighlight"
+              value: Qt.rgba(Theme.accent.r, Theme.accent.g, Theme.accent.b, 0.3).toString() }
+
     function summarizePerson(senderKey, name) {
         ai.summarizePerson(senderKey, name)
         root.summaryOpen = true
@@ -189,12 +215,25 @@ Item {
                 anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
                 spacing: 6
-                visible: ai.available
+
+                IconButton {
+                    objectName: "chatSearchButton"
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: !messages.topicsMode
+                    iconName: "search"
+                    glyphSize: 17
+                    Accessible.name: qsTr("Search in this chat")
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 600
+                    ToolTip.text: Qt.platform.os === "osx" ? qsTr("Search in this chat (\u2318F)")
+                                                          : qsTr("Search in this chat (Ctrl+F)")
+                    onClicked: chatSearch.visible ? root.closeSearch() : root.openSearch()
+                }
 
                 PillButton {
                     id: summaryButton
                     objectName: "summaryButton"
-                    visible: ai.enabled
+                    visible: ai.available && ai.enabled
                     iconName: "sparkle"
                     text: qsTr("Summarize")
                     onClicked: summaryMenu.popup(summaryButton, 0, summaryButton.height + 4)
@@ -203,6 +242,7 @@ Item {
                 // AI switch: filled when on. Turning it on asks first, turning it off doesn't.
                 PillButton {
                     objectName: "aiSwitch"
+                    visible: ai.available
                     filled: ai.enabled
                     text: ai.enabled ? qsTr("AI on") : qsTr("AI off")
                     ToolTip.visible: hovered
@@ -224,6 +264,79 @@ Item {
             Layout.fillWidth: true
             implicitHeight: 1
             color: Theme.separator
+        }
+
+        // Search in the open chat: Enter / ↑ older, Shift+Enter / ↓ newer, Esc closes.
+        Rectangle {
+            id: chatSearch
+            objectName: "chatSearch"
+            property string scope: ""
+            Layout.fillWidth: true
+            implicitHeight: visible ? 48 : 0
+            visible: false
+            color: Theme.sidebar
+
+            RowLayout {
+                anchors.fill: parent
+                anchors.leftMargin: 12
+                anchors.rightMargin: 12
+                spacing: 6
+
+                SearchBox {
+                    id: chatSearchBox
+                    objectName: "chatSearchBox"
+                    Layout.fillWidth: true
+                    placeholder: qsTr("Search in this chat")
+                    onEdited: text => chatSearchTimer.restart()
+                    onCleared: root.closeSearch()
+                    onSubmitted: backwards => backwards ? messages.searchNewer()
+                                                        : messages.searchOlder()
+                }
+                Timer {
+                    id: chatSearchTimer
+                    interval: 350
+                    onTriggered: messages.searchInChat(chatSearchBox.text)
+                }
+                Text {
+                    objectName: "chatSearchCounter"
+                    text: messages.chatSearchBusy && messages.chatSearchCount === 0
+                          ? qsTr("Searching\u2026")
+                          : messages.chatSearchQuery === "" ? ""
+                          : messages.chatSearchCount === 0 ? qsTr("Nothing found")
+                          : qsTr("%1 of %2").arg(messages.chatSearchIndex)
+                              .arg(messages.chatSearchCount + (messages.chatSearchMore ? "+" : ""))
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSmall
+                }
+                IconButton {
+                    iconName: "chevron-down"
+                    rotation: 180
+                    glyphSize: 15
+                    enabled: messages.chatSearchIndex < messages.chatSearchCount
+                             || messages.chatSearchMore
+                    Accessible.name: qsTr("Older result")
+                    onClicked: messages.searchOlder()
+                }
+                IconButton {
+                    iconName: "chevron-down"
+                    glyphSize: 15
+                    enabled: messages.chatSearchIndex > 1
+                    Accessible.name: qsTr("Newer result")
+                    onClicked: messages.searchNewer()
+                }
+                IconButton {
+                    iconName: "close"
+                    glyphSize: 11
+                    Accessible.name: qsTr("Close search")
+                    onClicked: root.closeSearch()
+                }
+            }
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: 1
+                color: Theme.separator
+            }
         }
 
         // The pinned message (one of several: a click jumps to it and shows the next older).

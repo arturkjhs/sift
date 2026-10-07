@@ -334,6 +334,48 @@ class PinnedTest(ActionCase):
         self.assertEqual(self.model.pinnedCount, 0)
 
 
+class ChatSearchTest(ActionCase):
+    total = 300
+
+    async def test_results_step_and_highlight(self) -> None:
+        def answer(req: dict[str, Any]) -> list[dict[str, Any]] | None:
+            if req["@type"] != "searchChatMessages" or not req["query"]:
+                return None
+            start = req["from_message_id"] or 10**9
+            hits = [i for i in (290, 200, 120, 30, 10) if i < start][:3]
+            return [{"@type": "foundChatMessages", "total_count": 5, "@extra": req["@extra"],
+                     "messages": [msg(i, f"meet at {i}") for i in hits],
+                     "next_from_message_id": hits[-1] if len(hits) == 3 else 0}]
+
+        self.server.hook = answer
+        self.model.open(CHAT)
+        await wait_until(lambda: not self.model.loading and self.model.rowCount() >= 50)
+        jumps: list[int] = []
+        self.model.chatSearchJump.connect(jumps.append)
+        self.model.searchInChat("meet")
+        await wait_until(lambda: jumps == [290])
+        self.assertEqual((self.model.chatSearchIndex, self.model.chatSearchCount,
+                          self.model.chatSearchMore), (1, 3, True))
+        self.model.searchOlder()
+        self.model.searchOlder()
+        self.assertEqual(jumps, [290, 200, 120])
+        self.model.searchOlder()  # past the loaded results: the next page
+        await wait_until(lambda: len(jumps) == 4)
+        self.assertEqual((jumps[-1], self.model.chatSearchCount, self.model.chatSearchMore),
+                         (30, 5, False))
+        self.model.searchNewer()
+        self.assertEqual(jumps[-1], 120)
+
+        await self.push({"@type": "updateNewMessage", "message": msg(301, "Meeting at 6")})
+        html = self.role(0, self.Role.Html)
+        self.assertIn('<span style="background-color:', html)
+        self.assertIn(">Meet</span>ing", html)
+        self.assertNotIn("background-color", html.split("Meet</span>ing")[1])  # time spacer
+        self.model.endChatSearch()
+        self.assertNotIn("background-color", self.role(0, self.Role.Html))
+        self.assertEqual(self.model.chatSearchCount, 0)
+
+
 class PrivateStatusTest(ActionCase):
     async def test_private_chat_shows_last_seen(self) -> None:
         await self.push(new_chat(5, "Olena", 2, "chatTypePrivate"))

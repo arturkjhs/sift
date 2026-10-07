@@ -41,8 +41,14 @@ SplitView {
         SplitView.maximumWidth: 520
         color: Theme.sidebar
 
+        // Cmd/Ctrl+F searches the open chat; with Shift (or no chat open) everything.
         Shortcut {
             sequences: [StandardKey.Find]
+            onActivated: root.selectedChatId !== 0 && !messages.topicsMode
+                         ? messageView.openSearch() : searchField.focusInput()
+        }
+        Shortcut {
+            sequences: ["Ctrl+Shift+F"]
             onActivated: searchField.focusInput()
         }
         Binding { target: search; property: "accentColor"; value: Theme.accent.toString() }

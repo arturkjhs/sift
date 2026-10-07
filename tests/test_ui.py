@@ -145,6 +145,12 @@ def responder(req: dict[str, Any]) -> list[dict[str, Any]]:
                      "@extra": req["@extra"], "messages": [
                          _msg(2, "A longer message that should wrap inside the bubble because "
                                  "it is definitely wider than the maximum bubble width allows.")]}]
+        case "searchChatMessages" if req.get("query") == "bubble":
+            found = [_msg(2, "A longer message that should wrap inside the bubble because it "
+                             "is definitely wider than the maximum bubble width allows.",
+                          reply_to=1)]
+            return [{"@type": "foundChatMessages", "total_count": 1, "next_from_message_id": 0,
+                     "messages": found, "@extra": req["@extra"]}]
         case "getMessages":
             return [{"@type": "messages", "total_count": 0, "messages": [],
                      "@extra": req["@extra"]}]
@@ -658,6 +664,25 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         session.messages.clearSelection()
         pump()
         self.assertFalse(selection_bar.isVisible())
+
+        # Search in the chat: the bar, a counter, the match highlighted
+        QMetaObject.invokeMethod(message_view, "openSearch")
+        chat_search_box = find_item(window.contentItem(), "chatSearchBox")
+        chat_search_box.setProperty("text", "bubble")
+        session.messages.searchInChat("bubble")
+        await wait_until(lambda: (pump(), session.messages.chatSearchIndex)[1] == 1)
+        await settle(0.2)
+        self.assertEqual(find_item(window.contentItem(), "chatSearchCounter").property("text"),
+                         "1 of 1")
+        from tgclient.models.messages import Role as MessageRole
+
+        self.assertIn("background-color", session.messages.data(
+            session.messages.index(session.messages.rowOf(2)), MessageRole.Html))
+        _screenshot(window, "chat-search")
+        QMetaObject.invokeMethod(message_view, "closeSearch")
+        pump()
+        self.assertFalse(find_item(window.contentItem(), "chatSearch").isVisible())
+        self.assertEqual(session.messages.chatSearchQuery, "")
 
         # Delete and forward dialogs
         delete_dialog = window.findChild(QObject, "deleteDialog")

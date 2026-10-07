@@ -104,8 +104,9 @@
   AI-саммари — по теме, а не по всему чату.
   → `store/forums.py`, `models/topics.py` + `TopicList.qml`, `ChatHistory(topic_id=)`, отправка/черновики/typing с `topic_id`, саммари темы (`topic:<id>`).
 
-- [ ] **Поиск внутри открытого чата.** Cmd/Ctrl+F в чате (сайдбар-поиск остаётся по всему):
+- [x] **Поиск внутри открытого чата.** Cmd/Ctrl+F в чате (сайдбар-поиск остаётся по всему):
   `searchChatMessages`, стрелки вверх/вниз, подсветка, прыжок через существующий `jumpTo`.
+  → `messages.searchInChat/searchOlder/searchNewer`, полоса `chatSearch` в `MessageView.qml`, `richtext.highlight_html`; глобальный поиск — Cmd/Ctrl+Shift+F.
 
 - [ ] **`t.me`-ссылки внутри приложения.** `getInternalLinkType`: ссылка на сообщение →
   `getMessageLinkInfo` и прыжок; на публичный чат → `searchPublicChat` и открытие;

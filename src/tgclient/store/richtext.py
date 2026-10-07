@@ -9,6 +9,7 @@ clipped to the enclosing entity instead of producing broken markup.
 from __future__ import annotations
 
 import html
+import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
@@ -156,3 +157,22 @@ def formatted_to_html(formatted: dict[str, Any] | None, palette: Palette, tail: 
         out.append(stack.pop().close)
 
     return f'<div style="white-space:pre-wrap">{"".join(out)}{tail}</div>'
+
+
+_TAG = re.compile(r"(<[^>]*>)")
+
+
+def highlight_html(html_text: str, query: str, background: str) -> str:
+    """Mark the query's words (2+ characters, any case) in rich text, outside of tags."""
+    words = sorted({html.escape(w) for w in query.split() if len(w) >= 2}, key=len,
+                   reverse=True)
+    if not words or not html_text:
+        return html_text
+    pattern = re.compile("|".join(re.escape(w) for w in words), re.IGNORECASE)
+    parts = _TAG.split(html_text)
+    for index in range(0, len(parts), 2):  # text between tags
+        parts[index] = pattern.sub(
+            lambda m: f'<span style="background-color:{background}">{m.group(0)}</span>',
+            parts[index])
+    return "".join(parts)
+

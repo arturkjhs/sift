@@ -8,6 +8,7 @@ FocusScope {
     property string placeholder: qsTr("Search")
     signal edited(string text)
     signal cleared()
+    signal submitted(bool backwards)   // Enter (Shift+Enter: backwards)
 
     implicitHeight: 34
 
@@ -54,6 +55,8 @@ FocusScope {
             selectByMouse: true
             onTextEdited: root.edited(text)
             Keys.onEscapePressed: root.clear()
+            Keys.onReturnPressed: event => root.submitted(event.modifiers & Qt.ShiftModifier)
+            Keys.onEnterPressed: event => root.submitted(event.modifiers & Qt.ShiftModifier)
 
             Text {
                 anchors.verticalCenter: parent.verticalCenter
