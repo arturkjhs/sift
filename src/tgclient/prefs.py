@@ -16,6 +16,7 @@ log = logging.getLogger(__name__)
 
 DEFAULTS: dict[str, Any] = {
     "theme": "system",
+    "ui_language": "",  # "" = the system's; en | ru | uk | cs
     "notifications": True,
     "notification_preview": True,
     "notification_sound": True,  # off: every notification is silent

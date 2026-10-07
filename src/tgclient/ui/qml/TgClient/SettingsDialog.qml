@@ -109,6 +109,32 @@ Popup {
                 }
             }
 
+            RowLayout {
+                objectName: "uiLanguage"
+                spacing: 6
+                Text {
+                    text: qsTr("Language")
+                    color: Theme.text
+                    font.pixelSize: Theme.fontBody
+                    rightPadding: 4
+                }
+                Repeater {
+                    model: [
+                        { key: "", label: qsTr("System") },
+                        { key: "en", label: "English" },
+                        { key: "ru", label: "Русский" },
+                        { key: "uk", label: "Українська" },
+                        { key: "cs", label: "Čeština" },
+                    ]
+                    PillButton {
+                        required property var modelData
+                        text: modelData.label
+                        filled: shell !== null && shell.language === modelData.key
+                        onClicked: shell.setLanguage(modelData.key)
+                    }
+                }
+            }
+
             SectionTitle { text: qsTr("Notifications") }
             RowLayout {
                 Layout.fillWidth: true

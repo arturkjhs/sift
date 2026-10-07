@@ -389,6 +389,7 @@ def create_engine(
     engine._tgclient_refs = (  # type: ignore[attr-defined]
         shell, images, icons, qr, accounts, updates, lock, camera)
     context = engine.rootContext()
+    shell.engines.append(engine)  # retranslated when the UI language changes
     context.setContextProperty("shell", shell)
     context.setContextProperty("lock", lock)
     context.setContextProperty("accounts", accounts)

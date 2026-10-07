@@ -200,7 +200,8 @@
   → `ui/privacy.py` (`privacy`): разделы Privacy/Storage и уведомления по типам чатов в настройках.
 - [x] Прокси (SOCKS5, MTProto: `addProxy`, `enableProxy`).
   → `ui/proxy.py` (`proxies`), раздел Proxy в настройках, proxy-ссылки с подтверждением.
-- [ ] Локализация интерфейса RU/UA/CZ (строки уже в `qsTr()`).
+- [x] Локализация интерфейса RU/UA/CZ (строки уже в `qsTr()`).
+  → `ui/i18n/{ru,uk,cs}.json` + `.qm`, `scripts/update_translations.py`, выбор языка в Settings (на лету). Строки из Python пока английские.
 - [x] Транскрипция через TDLib `recognizeSpeech` для Premium-аккаунтов (бесплатно,
   без OpenRouter).
   → `AiService._recognize` (при `premium`), кнопка Transcribe и без «AI on».

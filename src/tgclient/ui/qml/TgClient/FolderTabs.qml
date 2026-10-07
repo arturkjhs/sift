@@ -74,7 +74,7 @@ Item {
 
                 Text {
                     anchors.verticalCenter: parent.verticalCenter
-                    text: tab.title
+                    text: tab.key === "main" ? qsTr("All chats") : tab.title
                     color: tab.current ? Theme.accent : Theme.textMuted
                     font.pixelSize: Theme.fontBody
                     font.weight: tab.current ? Font.DemiBold : Font.Normal

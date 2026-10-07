@@ -335,5 +335,37 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.warnings, [], "QML warnings in admin tools")
 
 
+    async def test_ui_language_switches_live(self) -> None:
+        shell = self.engine._tgclient_refs[0]
+        self.open_chat(FORUM)
+        await self.settle(0.1)
+
+        def texts() -> set[str]:
+            return {str(i.property("text")) for i in _all_items(self.window.contentItem())
+                    if i.property("text")}
+
+        self.assertIn("All chats", texts())
+        self.assertIn("Search chats and messages", {
+            str(i.property("placeholder")) for i in _all_items(self.window.contentItem())
+            if i.property("placeholder")})
+        try:
+            for language, expected in (("ru", "Поиск чатов и сообщений"),
+                                       ("uk", "Пошук чатів і повідомлень"),
+                                       ("cs", "Hledat chaty a zprávy")):
+                shell.setLanguage(language)
+                await self.settle(0.1)
+                placeholders = {str(i.property("placeholder"))
+                                for i in _all_items(self.window.contentItem())
+                                if i.property("placeholder")}
+                self.assertIn(expected, placeholders, language)
+                self.assertNotIn("All chats", texts())
+                if language == "ru":
+                    _screenshot(self.window, "language-ru")
+        finally:
+            shell.setLanguage("en")
+        await self.settle(0.1)
+        self.assertEqual(self.warnings, [], "QML warnings when switching languages")
+
+
 if __name__ == "__main__":
     unittest.main()

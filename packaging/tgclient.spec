@@ -22,7 +22,7 @@ TDLIB_DIR = Path(os.environ.get("TDLIB_DIR") or ROOT / "vendor" / "tdlib")
 TDJSON = (TDLIB_DIR / "lib" / LIB).resolve()  # the real file, not the symlink
 
 datas = collect_data_files("tgclient",
-                           includes=["**/*.qml", "**/qmldir", "**/*.svg", "**/*.json"])
+                           includes=["**/*.qml", "**/qmldir", "**/*.svg", "**/*.json", "**/*.qm"])
 binaries = [(str(TDJSON), "tdlib")]
 hiddenimports = collect_submodules("tgclient") + [
     "PySide6.QtSvg", "PySide6.QtMultimedia", "PySide6.QtQuickControls2",
