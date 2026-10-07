@@ -108,11 +108,11 @@
   `searchChatMessages`, стрелки вверх/вниз, подсветка, прыжок через существующий `jumpTo`.
   → `messages.searchInChat/searchOlder/searchNewer`, полоса `chatSearch` в `MessageView.qml`, `richtext.highlight_html`; глобальный поиск — Cmd/Ctrl+Shift+F.
 
-- [ ] **`t.me`-ссылки внутри приложения.** `getInternalLinkType`: ссылка на сообщение →
+- [x] **`t.me`-ссылки внутри приложения.** `getInternalLinkType`: ссылка на сообщение →
   `getMessageLinkInfo` и прыжок; на публичный чат → `searchPublicChat` и открытие;
   инвайт → `checkChatInviteLink` с превью и кнопкой «вступить» (`joinChatByInviteLink`).
   Также `tg://`-ссылки из rich text (упоминания, хэштеги).
-  *Частично (M8):* ссылки на сообщения (`messages.openLink`). Нет: публичных чатов, инвайтов, `tg://`.
+  → `store/links.py` (`getInternalLinkType`: сообщения, публичные чаты/боты, телефоны, инвайты с окном «Join», `tg://user`, хэштеги → поиск); «Join» вместо поля ввода в чужом чате; права на запись в каналах/группах.
 
 - [x] **Черновики с синхронизацией.** `setChatDraftMessage` при уходе из чата и по таймеру,
   восстановление из `chat.draft_message` / `updateChatDraftMessage`, «Draft: …» красным

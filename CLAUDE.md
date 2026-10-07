@@ -323,10 +323,15 @@ src/tgclient/
   option» передаёт уже предложенные стратегии. Оба стримятся (`OpenRouter.stream`, SSE) с
   частичным состоянием `pending`; кэш по (чат, сообщение, `edit_date`, действие, язык, модель,
   читаемые языки, модификатор) — повторный клик бесплатен.
-- Ссылки Telegram в ленте (`t.me/…`, `telegram.me`, `tg:`) идут в `messages.openLink`:
-  `getMessageLinkInfo` → `linkResolved(chat, message)`; свой чат — прыжок с подгрузкой
-  (`showMessage`), другой известный — открыть его на сообщении, иначе — браузер. Ссылки не на
-  Telegram открываются как раньше.
+- Ссылки Telegram в ленте (`t.me/…`, `telegram.me`, `tg:`) идут в `messages.openLink` →
+  `store/links.resolve`: `getInternalLinkType` → публичный чат/бот (`searchPublicChat`),
+  номер (`searchUserByPhoneNumber`), инвайт (`checkChatInviteLink`: `chat_id` ≠ 0 — открыть,
+  иначе `inviteReady` → окно с «Join», `joinChatByInviteLink`), иначе `getMessageLinkInfo` →
+  `linkResolved(chat, message)`; `tg://user?id=` — `createPrivateChat`, `tg://search?q=`
+  (хэштеги) — `searchRequested` → поиск в сайдбаре. Остальное — браузер.
+- Права на запись: канал — владелец или админ с `can_post_messages`, группа — пока я в ней
+  (`PresenceStore.group_status` из `updateSupergroup`/`updateBasicGroup`). Открытый по ссылке
+  чат, где я `chatMemberStatusLeft`, показывает «Join» вместо поля ввода (`joinChat`).
 - Поиск (M5): индекс `search.sqlite3` хранит только токены (FTS5 `content=''`,
   `contentless_delete=1`) и векторы, без текста сообщений — тексты результатов берутся из TDLib
   (`getMessages`). Секретные чаты не индексируются. Поиск = RRF из трёх списков: локальный FTS5,
@@ -592,8 +597,7 @@ uv run python -m unittest discover -s tests
   эмодзи; лимиты автозагрузки (размер, мобильная сеть); запись кружков; пауза/предпрослушка
   записи голосового.
 - Лента: черновики с форматированием (сейчас plain text с markdown-разметкой);
-  Pre как отдельный блок; цитаты с полосой слева; ссылки на профили/чаты (`t.me/<username>`) внутри приложения (на сообщения — уже); реальные права на отправку
-  (сейчас запрет только для каналов); разбивка сообщений длиннее 4096 символов.
+  Pre как отдельный блок; цитаты с полосой слева; разбивка сообщений длиннее 4096 символов.
 - AI: ключ OpenRouter в keyring вместо конфиг-`.env` (после Developer ID, см. «Упаковка»);
   транскрипция кружков (видео → аудио); для Premium — TDLib `recognizeSpeech` бесплатно;
   саммари длинных чатов по частям (сейчас обрезка до 1500 сообщений / 200k символов, берутся

@@ -11,6 +11,7 @@ Item {
     readonly property bool isGroupChat: messages.chatType === "group" || messages.chatType === "supergroup"
 
     signal openChatRequested(var chatId, var messageId)
+    signal searchRequested(string query)
 
     // Put a draft (saved, or changed on another device) into the composer without saving it back.
     function loadDraft(text, replyTo) {
@@ -93,6 +94,9 @@ Item {
         target: messages
         function onViewerRequested(messageId) { viewer.open(messageId) }
         // A t.me link to a message: jump to it here, or open the other chat.
+        function onSearchRequested(query) { root.searchRequested(query) }
+        function onInviteReady(info) { inviteDialog.show(info) }
+        function onJoinRequested() { joinNotice.visible = true }
         function onLinkResolved(chatId, messageId) {
             if (chatId !== messages.chatId)
                 root.openChatRequested(chatId, messageId)
@@ -618,10 +622,43 @@ Item {
             onActivated: messages.clearSelection()
         }
 
+        // Opened from a link without being a member: join instead of writing.
+        Rectangle {
+            objectName: "joinBar"
+            Layout.fillWidth: true
+            implicitHeight: 56
+            visible: messages.canJoin && !messages.topicsMode
+            color: Theme.sidebar
+            Rectangle {
+                width: parent.width
+                height: 1
+                color: Theme.separator
+            }
+            PillButton {
+                id: joinButton
+                objectName: "joinButton"
+                anchors.centerIn: parent
+                filled: true
+                text: messages.chatType === "channel" ? qsTr("Join channel") : qsTr("Join group")
+                onClicked: messages.joinChat()
+            }
+            Text {
+                id: joinNotice
+                anchors.left: joinButton.right
+                anchors.leftMargin: 12
+                anchors.verticalCenter: parent.verticalCenter
+                visible: false
+                text: qsTr("Request sent to the admins")
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+        }
+
         Composer {
             id: composer
             Layout.fillWidth: true
             visible: messages.canWrite && !selectionBar.visible && !messages.topicsMode
+                     && !messages.canJoin
             replyToId: root.replyToId
             onCancelReply: root.replyToId = 0
             onSent: {
@@ -1216,6 +1253,92 @@ Item {
             iconName: "close"
             danger: true
             onTriggered: messages.unpinAll()
+        }
+    }
+
+    // An invite link to a chat the user isn't in: what it is, and Join.
+    Popup {
+        id: inviteDialog
+        objectName: "inviteDialog"
+        property var info: ({})
+
+        function show(info) {
+            inviteDialog.info = info
+            open()
+        }
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(380, root.width - 48)
+        modal: true
+        padding: 20
+        background: Rectangle {
+            radius: 12
+            color: Theme.sidebar
+            border.width: 1
+            border.color: Theme.separator
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+            Avatar {
+                Layout.alignment: Qt.AlignHCenter
+                size: 64
+                initials: (inviteDialog.info.title || "?").slice(0, 1).toUpperCase()
+                colorIndex: (inviteDialog.info.title || "").length % 7
+            }
+            Text {
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+                text: inviteDialog.info.title || ""
+                textFormat: Text.PlainText
+                color: Theme.text
+                font.pixelSize: 16
+                font.weight: Font.DemiBold
+            }
+            Text {
+                Layout.fillWidth: true
+                horizontalAlignment: Text.AlignHCenter
+                readonly property int count: inviteDialog.info.members || 0
+                text: inviteDialog.info.channel
+                      ? (count === 1 ? qsTr("1 subscriber") : qsTr("%1 subscribers").arg(count))
+                      : (count === 1 ? qsTr("1 member") : qsTr("%1 members").arg(count))
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+            }
+            Text {
+                Layout.fillWidth: true
+                visible: text !== ""
+                horizontalAlignment: Text.AlignHCenter
+                wrapMode: Text.Wrap
+                maximumLineCount: 6
+                elide: Text.ElideRight
+                text: inviteDialog.info.description || ""
+                textFormat: Text.PlainText
+                color: Theme.text
+                font.pixelSize: Theme.fontBody
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.topMargin: 6
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                PillButton {
+                    text: qsTr("Cancel")
+                    onClicked: inviteDialog.close()
+                }
+                PillButton {
+                    objectName: "inviteJoin"
+                    filled: true
+                    text: inviteDialog.info.request ? qsTr("Request to join")
+                          : inviteDialog.info.channel ? qsTr("Join channel") : qsTr("Join group")
+                    onClicked: {
+                        messages.joinByInvite(inviteDialog.info.link)
+                        inviteDialog.close()
+                    }
+                }
+            }
         }
     }
 

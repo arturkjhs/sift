@@ -40,6 +40,7 @@ from ..store.format import (
     message_body,
 )
 from ..store.history import DELETED_REPLY, ChatHistory, Commit, Message
+from ..store import links
 from ..store.link_preview import message_link_preview
 from ..store.forums import ForumStore, Topic, message_topic_id, topic_obj
 from ..store.pinned import PinnedMessages
@@ -200,6 +201,9 @@ class MessageListModel(QAbstractListModel):
     editReady = Signal("QVariant", str)  # message id, its text as markdown for the composer
     statusChanged = Signal()
     linkResolved = Signal("QVariant", "QVariant")  # chat id, message id (0: just the chat)
+    searchRequested = Signal(str)  # a hashtag clicked: search for it
+    inviteReady = Signal("QVariantMap")  # an invite link to a chat the user isn't in
+    joinRequested = Signal()  # joining needs an admin's approval
     latestChanged = Signal()
     countersChanged = Signal()
     selectionChanged = Signal()
@@ -275,10 +279,19 @@ class MessageListModel(QAbstractListModel):
         chat = self._chat()
         return chat.type if chat else ""
 
-    @Property(bool, notify=chatChanged)
+    @Property(bool, notify=statusChanged)
     def canWrite(self) -> bool:
+        """Channels: owner and posting admins; groups: members (not left, not banned)."""
         chat = self._chat()
-        return chat is not None and chat.type != "channel"  # TODO: real permissions
+        if chat is None:
+            return False
+        presence = self._presence
+        if chat.type == "channel":
+            return presence is not None and presence.can_post(chat)
+        if chat.type in ("group", "supergroup") and presence is not None:
+            return presence.member_status(chat) not in ("chatMemberStatusLeft",
+                                                         "chatMemberStatusBanned")
+        return True
 
     @Property(bool, notify=loadingChanged)
     def loading(self) -> bool:
@@ -1020,24 +1033,50 @@ class MessageListModel(QAbstractListModel):
 
     @Slot(str)
     def openLink(self, link: str) -> None:
-        """Telegram links to a message (t.me/<chat>/<id>, t.me/c/…, tg://…) open inside the
-        client (linkResolved), anything else in the browser."""
-        if not _TELEGRAM_LINK.match(link):
+        """Telegram links open inside the client: a message or chat (linkResolved), an invite
+        to join (inviteReady), a hashtag search (searchRequested); others in the browser."""
+        if not links.TELEGRAM_LINK.match(link):
             QDesktopServices.openUrl(QUrl(link))
             return
         self._spawn(self._open_link(link))
 
     async def _open_link(self, link: str) -> None:
-        try:
-            info = await self._client.send({"@type": "getMessageLinkInfo", "url": link})
-        except TdError as e:
-            log.info("Not a message link (%s): %s", e.message, link)
-            info = {}
-        chat_id = info.get("chat_id") or 0
-        if chat_id and chat_id in self._chats.chats:
-            self.linkResolved.emit(chat_id, (info.get("message") or {}).get("id") or 0)
-        elif not link.startswith("tg:"):
-            QDesktopServices.openUrl(QUrl(link))
+        target = await links.resolve(self._client, link)
+        match target.kind:
+            case "chat":
+                self.linkResolved.emit(target.chat_id, target.message_id)
+            case "search":
+                self.searchRequested.emit(target.query)
+            case "invite":
+                self.inviteReady.emit(_invite_map(target.invite))
+            case _ if not link.startswith("tg:"):
+                QDesktopServices.openUrl(QUrl(link))
+
+    @Slot(str)
+    def joinByInvite(self, invite_link: str) -> None:
+        self._spawn(self._join(invite_link, 0))
+
+    @Slot()
+    def joinChat(self) -> None:
+        if self._history is not None:
+            self._spawn(self._join("", self._history.chat_id))
+
+    async def _join(self, invite_link: str, chat_id: int) -> None:
+        joined = await links.join(self._client, invite_link, chat_id)
+        if joined and invite_link:
+            self.linkResolved.emit(joined, 0)
+        elif not joined:
+            self.joinRequested.emit()  # sent for approval (or failed: logged)
+
+    @Property(bool, notify=statusChanged)
+    def canJoin(self) -> bool:
+        """A group or channel opened from a link without being a member."""
+        chat = self._chat()
+        if chat is None or self._presence is None or chat.type not in (
+                "supergroup", "channel", "group"):
+            return False
+        return (self._presence.knows_status(chat)
+                and self._presence.member_status(chat) == "chatMemberStatusLeft")
 
     @Slot("QVariant")
     def jumpTo(self, message_id: Any) -> None:
@@ -2002,8 +2041,15 @@ class MessageListModel(QAbstractListModel):
 
 
 _TAIL = "<!--time-->"
-_TELEGRAM_LINK = re.compile(r"^(?:tg:|(?:https?://)?(?:www\.)?(?:t\.me|telegram\.(?:me|dog))/)",
-                            re.IGNORECASE)
+
+
+def _invite_map(info: dict[str, Any]) -> dict[str, Any]:
+    kind = (info.get("type") or {}).get("@type", "")
+    return {"link": info.get("link", ""), "title": info.get("title", ""),
+            "description": info.get("description", ""),
+            "members": int(info.get("member_count") or 0),
+            "channel": kind == "inviteLinkChatTypeChannel",
+            "request": bool(info.get("creates_join_request"))}
 
 
 def _display_size(media: Media) -> tuple[int, int]:

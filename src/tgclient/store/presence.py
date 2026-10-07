@@ -52,6 +52,8 @@ class PresenceStore:
         self.members: dict[int, int] = {}  # basic group / supergroup id -> member count
         self.channels: set[int] = set()  # supergroup ids that are channels
         self.online_count: dict[int, int] = {}  # chat id -> online members (open chats only)
+        # basic group / supergroup id -> my ChatMemberStatus there
+        self.group_status: dict[int, dict[str, Any]] = {}
         self._listeners: list[Listener] = []
         handlers: dict[str, Callable[[Event], None]] = {
             "updateUser": self._on_user,
@@ -72,6 +74,28 @@ class PresenceStore:
         status = self.statuses.get(user_id) or {}
         return (status.get("@type") == "userStatusOnline"
                 and status.get("expires", 0) > (now or time.time()))
+
+    def knows_status(self, chat: Any) -> bool:
+        return chat.peer_id in self.group_status
+
+    def member_status(self, chat: Any) -> str:
+        """My ChatMemberStatus @type in a group/channel ("" if unknown)."""
+        status = self.group_status.get(chat.peer_id) or {}
+        kind = status.get("@type", "")
+        if kind in ("chatMemberStatusCreator", "chatMemberStatusRestricted") and not status.get(
+                "is_member", True):
+            return "chatMemberStatusLeft"
+        return kind
+
+    def can_post(self, chat: Any) -> bool:
+        """Channels: only the owner and admins who may post."""
+        status = self.group_status.get(chat.peer_id) or {}
+        kind = status.get("@type", "")
+        if kind == "chatMemberStatusCreator":
+            return True
+        if kind == "chatMemberStatusAdministrator":
+            return bool((status.get("rights") or {}).get("can_post_messages"))
+        return False
 
     def _emit(self, kind: PresenceKind, payload: Any) -> None:
         for listener in list(self._listeners):
@@ -113,11 +137,15 @@ class PresenceStore:
     def _on_basic_group(self, event: Event) -> None:
         group = event["basic_group"]
         self.members[group["id"]] = group.get("member_count", 0)
+        if group.get("status"):
+            self.group_status[group["id"]] = group["status"]
         self._emit("members", group["id"])
 
     def _on_supergroup(self, event: Event) -> None:
         group = event["supergroup"]
         self.members[group["id"]] = group.get("member_count", 0)
+        if group.get("status"):
+            self.group_status[group["id"]] = group["status"]
         if group.get("is_channel"):
             self.channels.add(group["id"])
         self._emit("members", group["id"])

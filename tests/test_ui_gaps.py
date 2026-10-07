@@ -111,5 +111,23 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.warnings, [], "QML warnings in a topic")
 
 
+    async def test_invite_dialog_and_join_bar(self) -> None:
+        from PySide6.QtCore import QMetaObject, QObject
+
+        self.open_chat(FORUM)
+        await self.settle(0.1)
+        self.session.messages.inviteReady.emit({
+            "link": "https://t.me/+x", "title": "Prague IT", "members": 230,
+            "description": "Meetups and talks for developers in Prague.", "channel": False,
+            "request": False})
+        await self.settle()
+        dialog = self.window.findChild(QObject, "inviteDialog")
+        self.assertTrue(dialog.property("opened"))
+        _screenshot(self.window, "invite")
+        QMetaObject.invokeMethod(dialog, "close")
+        await self.settle(0.15)
+        self.assertEqual(self.warnings, [], "QML warnings in the invite dialog")
+
+
 if __name__ == "__main__":
     unittest.main()

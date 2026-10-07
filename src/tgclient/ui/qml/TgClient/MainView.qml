@@ -260,6 +260,10 @@ SplitView {
             anchors.fill: parent
             visible: root.selectedChatId !== 0
             onOpenChatRequested: (chatId, messageId) => root.openChat(chatId, messageId)
+            onSearchRequested: query => {  // a hashtag in a message
+                searchField.text = query
+                search.query = query
+            }
         }
 
         Text {
