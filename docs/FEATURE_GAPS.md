@@ -140,8 +140,9 @@
   `sendChatAction` при наборе; `updateUserStatus` → «был(а) …» в шапке лички.
   **проверить** онлайн в шапке лички.
   → M7: `store/presence.py`, шапка и список; свой typing в `ComposerModel`.
-- [ ] **Иконки в списке чатов:** pinned, muted, verified, ✓/✓✓ у своего последнего
+- [x] **Иконки в списке чатов:** pinned, muted, verified, ✓/✓✓ у своего последнего
   сообщения. Перевести оставшиеся глифы на набор `ui/icons.py`.
+  → роли `verified`/`outStatus` (+ `pinned`/`muted`) в `ChatListModel`, иконки в `ChatDelegate.qml`; статусы в пузыре, плеер голосовых, карточка файла, просмотрщик, переключатель аккаунтов — на `ui/icons.py`.
 - [ ] **Автодополнение @упоминаний.** `searchChatMembers` при вводе `@`; для людей без
   username — сущность `textEntityTypeMentionName` (собирать entities вручную, `parseMarkdown`
   её не создаёт).

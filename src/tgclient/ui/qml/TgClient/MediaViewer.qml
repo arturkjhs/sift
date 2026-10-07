@@ -141,11 +141,10 @@ Popup {
                     height: 32
                     spacing: 12
 
-                    Text {
-                        text: player.playbackState === MediaPlayer.PlayingState ? "❚❚"
-                                                                                : "▶"
+                    Icon {
+                        name: player.playbackState === MediaPlayer.PlayingState ? "pause" : "play"
                         color: "#FFFFFF"
-                        font.pixelSize: 16
+                        size: 20
                         HoverHandler { cursorShape: Qt.PointingHandCursor }
                         TapHandler { onTapped: parent.parent.parent.toggle() }
                     }

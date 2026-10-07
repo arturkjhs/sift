@@ -89,7 +89,6 @@ Item {
     readonly property real bubblePadding: bare ? 0 : timeOnMedia && !showSender && replyToId === 0
                                                      && forwardedFrom === "" ? 4 : 10
     readonly property real maxContentWidth: maxBubbleWidth - 2 * bubblePadding
-    readonly property var statusGlyph: ({ pending: "\u25f7", sent: "\u2713", read: "\u2713\u2713", failed: "!" })
 
     width: ListView.view ? ListView.view.width : 400
     // Other members of an album are drawn in the grid of its newest message.
@@ -715,12 +714,19 @@ Item {
                         color: timeRow.textColor
                         font.pixelSize: 11
                     }
-                    Text {
-                        visible: root.isOutgoing
-                        text: root.statusGlyph[root.status] || ""
-                        color: root.status === "failed" ? Theme.danger
-                             : root.timeOnMedia ? "#FFFFFF"
+                    Icon {
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: root.isOutgoing && root.status !== "failed"
+                        name: root.status === "read" ? "checks"
+                              : root.status === "pending" ? "clock" : "check"
+                        color: root.timeOnMedia ? "#FFFFFF"
                              : root.status === "read" ? Theme.accent : Theme.textMuted
+                        size: 14
+                    }
+                    Text {
+                        visible: root.isOutgoing && root.status === "failed"
+                        text: "!"
+                        color: Theme.danger
                         font.pixelSize: 11
                         font.weight: Font.DemiBold
                     }

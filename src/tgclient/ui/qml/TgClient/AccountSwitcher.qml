@@ -119,12 +119,12 @@ AbstractButton {
                                 font.weight: Font.Bold
                             }
                         }
-                        Text {
+                        Icon {
                             Layout.rightMargin: 8
                             visible: row.modelData.active
-                            text: "✓"
+                            name: "check"
                             color: Theme.accent
-                            font.pixelSize: Theme.fontTitle
+                            size: 18
                         }
                     }
                 }

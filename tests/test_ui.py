@@ -581,6 +581,19 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
                              "author": "", "show_large_media": False,
                              "type": {"@type": "linkPreviewTypeArticle", "photo": None}}}}
         session.client._dispatch({"@type": "updateNewMessage", "message": linked})
+        # list icons: verified Olena with my message read, muted and pinned Prague IT
+        session.client._dispatch({"@type": "updateUser", "user": {
+            "id": 1, "first_name": "Olena", "verification_status": {"is_verified": True}}})
+        session.client._dispatch({"@type": "updateChatReadOutbox", "chat_id": 1,
+                                  "last_read_outbox_message_id": 6})
+        session.client._dispatch({"@type": "updateChatNotificationSettings", "chat_id": 2,
+                                  "notification_settings": {"use_default_mute_for": False,
+                                                            "mute_for": 999999}})
+        session.client._dispatch({"@type": "updateChatPosition", "chat_id": 2, "position": {
+            "@type": "chatPosition", "list": {"@type": "chatListMain"}, "order": "200",
+            "is_pinned": True}})
+        session.client._dispatch({"@type": "updateChatLastMessage", "chat_id": 1,
+                                  "last_message": _msg(6, "hello", out=True), "positions": []})
         session.client._dispatch({"@type": "updateMessageInteractionInfo", "chat_id": 1,
                                   "message_id": 2, "interaction_info": reactions})
         session.client._dispatch({"@type": "updateChatAction", "chat_id": 1, "topic_id": None,
@@ -596,6 +609,9 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         message_list.positionViewAtBeginning()
         await settle(0.1)
         self.assertEqual(warnings, [], "QML warnings with reactions and forwards")
+        for name in ("verifiedIcon", "mutedIcon", "outStatus", "pinnedIcon"):
+            self.assertTrue(any(i.objectName() == name and i.isVisible()
+                                for i in _all_items(window.contentItem())), name)
         card = next(i for i in _all_items(message_list)
                     if i.objectName() == "linkCard" and i.isVisible())
         self.assertGreater(card.height(), 40)

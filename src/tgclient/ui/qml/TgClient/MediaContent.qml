@@ -230,13 +230,20 @@ Item {
             radius: 22
             color: Theme.accent
 
-            Text {
+            Text {  // a downloaded file: its type
                 anchors.centerIn: parent
-                text: root.busy ? "\u2715"
-                    : root.fileState === "ready" ? root.extension(root.fileName) : "\u2193"
+                visible: root.fileState === "ready" && !root.busy
+                text: root.extension(root.fileName)
                 color: Theme.textOnAccent
-                font.pixelSize: root.fileState === "ready" && !root.busy ? 10 : 16
+                font.pixelSize: 10
                 font.weight: Font.Bold
+            }
+            Icon {
+                anchors.centerIn: parent
+                visible: root.busy || root.fileState !== "ready"
+                name: root.busy ? "close" : "arrow-down"
+                color: Theme.textOnAccent
+                size: root.busy ? 16 : 20
             }
 
             TapHandler { onTapped: root.activated() }
@@ -299,14 +306,14 @@ Item {
             radius: 20
             color: Theme.accent
 
-            Text {
+            Icon {
                 anchors.centerIn: parent
-                anchors.horizontalCenterOffset: text === "\u25b6" ? 2 : 0
-                text: !root.isCurrentVoice ? "\u25b6"
-                    : voice.loading ? "\u2193"
-                    : voice.playing ? "\u275a\u275a" : "\u25b6"
+                anchors.horizontalCenterOffset: name === "play" ? 1 : 0
+                name: !root.isCurrentVoice ? "play"
+                    : voice.loading ? "arrow-down"
+                    : voice.playing ? "pause" : "play"
                 color: Theme.textOnAccent
-                font.pixelSize: voice.playing && root.isCurrentVoice ? 11 : 15
+                size: 20
             }
 
             TapHandler {

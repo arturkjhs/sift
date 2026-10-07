@@ -54,6 +54,7 @@ class PresenceStore:
         self.online_count: dict[int, int] = {}  # chat id -> online members (open chats only)
         # basic group / supergroup id -> my ChatMemberStatus there
         self.group_status: dict[int, dict[str, Any]] = {}
+        self.verified: set[int] = set()  # supergroup ids with a verified badge
         self._listeners: list[Listener] = []
         handlers: dict[str, Callable[[Event], None]] = {
             "updateUser": self._on_user,
@@ -144,6 +145,11 @@ class PresenceStore:
     def _on_supergroup(self, event: Event) -> None:
         group = event["supergroup"]
         self.members[group["id"]] = group.get("member_count", 0)
+        if (group.get("verification_status") or {}).get("is_verified") or group.get(
+                "is_verified"):
+            self.verified.add(group["id"])
+        else:
+            self.verified.discard(group["id"])
         if group.get("status"):
             self.group_status[group["id"]] = group["status"]
         if group.get("is_channel"):

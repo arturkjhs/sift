@@ -49,6 +49,8 @@ class Role(IntEnum):
     Typing = auto()
     Online = auto()
     MarkedUnread = auto()  # "mark as unread" without unread messages: a dot
+    Verified = auto()
+    OutStatus = auto()  # my last message: "" | pending | failed | sent | read
 
 
 class ChatListModel(QAbstractListModel):
@@ -144,6 +146,13 @@ class ChatListModel(QAbstractListModel):
                     return ""
                 return typing_text(self._presence.typing.get(chat.id, []), self._name,
                                    chat.type in ("private", "secret"))
+            case Role.Verified:
+                if chat.type in ("private", "secret"):
+                    user = self._users.users.get(chat.peer_id)
+                    return bool(user and user.is_verified)
+                return self._presence is not None and chat.peer_id in self._presence.verified
+            case Role.OutStatus:
+                return out_status(chat)
             case Role.MarkedUnread:
                 return chat.is_marked_as_unread and chat.unread_count == 0
             case Role.Online:
@@ -245,6 +254,22 @@ class ChatListModel(QAbstractListModel):
 
         index = self.index(row)
         self.dataChanged.emit(index, index)
+
+
+def out_status(chat: Any) -> str:
+    """The tick next to the time when the last message is mine."""
+    message = chat.last_message or {}
+    if not message.get("is_outgoing") or message.get("content", {}).get("@type", "").startswith(
+            ("messageChat", "messagePin")):
+        return ""
+    state = (message.get("sending_state") or {}).get("@type", "")
+    if state == "messageSendingStatePending":
+        return "pending"
+    if state == "messageSendingStateFailed":
+        return "failed"
+    if chat.type == "channel":
+        return ""
+    return "read" if message.get("id", 0) <= chat.last_read_outbox_message_id else "sent"
 
 
 def _role_name(role: Role) -> str:

@@ -18,6 +18,7 @@ class User:
     photo_file_id: int | None = None  # small profile photo; FileManager knows its state
     usernames: tuple[str, ...] = ()  # active @usernames, without the @
     is_bot: bool = False
+    is_verified: bool = False
 
     @property
     def full_name(self) -> str:
@@ -64,6 +65,8 @@ class UserStore:
             photo_file_id=small["id"] if small else None,
             usernames=tuple((raw.get("usernames") or {}).get("active_usernames") or ()),
             is_bot=(raw.get("type") or {}).get("@type") == "userTypeBot",
+            is_verified=bool((raw.get("verification_status") or {}).get("is_verified")
+                             or raw.get("is_verified")),
         )
         self._emit(raw["id"])
 

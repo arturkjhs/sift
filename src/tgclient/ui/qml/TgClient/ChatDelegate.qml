@@ -19,6 +19,8 @@ Rectangle {
     required property string typing
     required property bool online
     required property bool markedUnread
+    required property bool verified
+    required property string outStatus
 
     property bool selected: false
     signal clicked()
@@ -70,35 +72,82 @@ Rectangle {
         border.color: row.selected ? Theme.selection : Theme.sidebar
     }
 
-    Text {
-        id: titleText
+    // Title, then the verified badge and the muted bell.
+    Row {
+        id: titleRow
         anchors.left: avatar.right
         anchors.leftMargin: 10
-        anchors.right: timeText.left
-        anchors.rightMargin: 8
         y: 12
-        text: row.title
-        textFormat: Text.PlainText
-        elide: Text.ElideRight
-        color: Theme.text
-        font.pixelSize: Theme.fontTitle
-        font.weight: Font.DemiBold
+        spacing: 3
+        readonly property real room: timeRow.x - x - 8
+
+        Text {
+            id: titleText
+            width: Math.min(implicitWidth, titleRow.room - (verifiedIcon.visible ? 19 : 0)
+                                                         - (mutedIcon.visible ? 17 : 0))
+            text: row.title
+            textFormat: Text.PlainText
+            elide: Text.ElideRight
+            color: Theme.text
+            font.pixelSize: Theme.fontTitle
+            font.weight: Font.DemiBold
+        }
+        Icon {
+            id: verifiedIcon
+            objectName: "verifiedIcon"
+            anchors.verticalCenter: titleText.verticalCenter
+            visible: row.verified
+            name: "verified"
+            color: Theme.accent
+            size: 16
+        }
+        Icon {
+            id: mutedIcon
+            objectName: "mutedIcon"
+            anchors.verticalCenter: titleText.verticalCenter
+            visible: row.muted
+            name: "muted"
+            size: 14
+        }
     }
 
-    Text {
-        id: timeText
+    // ✓ / ✓✓ for my last message, then the time.
+    Row {
+        id: timeRow
         anchors.right: parent.right
         anchors.rightMargin: 12
-        anchors.baseline: titleText.baseline
-        text: row.time
-        color: row.unreadCount > 0 && !row.muted ? Theme.accent : Theme.textMuted
-        font.pixelSize: Theme.fontSmall
+        y: titleRow.y + titleText.baselineOffset - timeText.baselineOffset
+        spacing: 3
+
+        Icon {
+            objectName: "outStatus"
+            anchors.verticalCenter: timeText.verticalCenter
+            visible: row.outStatus !== "" && row.outStatus !== "failed"
+            name: row.outStatus === "read" ? "checks" : row.outStatus === "pending" ? "clock"
+                                                                                   : "check"
+            color: row.outStatus === "read" ? Theme.accent : Theme.textMuted
+            size: 15
+        }
+        Text {
+            anchors.verticalCenter: timeText.verticalCenter
+            visible: row.outStatus === "failed"
+            text: "!"
+            color: Theme.danger
+            font.pixelSize: Theme.fontSmall
+            font.weight: Font.Bold
+        }
+        Text {
+            id: timeText
+            text: row.time
+            color: row.unreadCount > 0 && !row.muted ? Theme.accent : Theme.textMuted
+            font.pixelSize: Theme.fontSmall
+        }
     }
 
     // "typing…" (accent) or "Draft: …" (danger) instead of the last message.
     Text {
         id: prefixText
-        anchors.left: titleText.left
+        anchors.left: titleRow.left
         anchors.baseline: previewText.baseline
         visible: row.typing === "" && row.draft !== ""
         text: qsTr("Draft:") + " "
@@ -108,10 +157,10 @@ Rectangle {
 
     Text {
         id: previewText
-        anchors.left: prefixText.visible ? prefixText.right : titleText.left
+        anchors.left: prefixText.visible ? prefixText.right : titleRow.left
         anchors.right: badges.left
         anchors.rightMargin: 8
-        anchors.top: titleText.bottom
+        anchors.top: titleRow.bottom
         anchors.topMargin: 3
         text: row.typing !== "" ? row.typing : row.draft !== "" ? row.draft : row.preview
         textFormat: Text.PlainText
@@ -140,6 +189,15 @@ Rectangle {
             width: 20
             label: ""
             color: row.muted ? Theme.badgeMuted : Theme.accent
+        }
+
+        Icon {  // pinned: when nothing else is there
+            objectName: "pinnedIcon"
+            anchors.verticalCenter: parent.verticalCenter
+            visible: row.pinned && row.unreadCount === 0 && row.mentionCount === 0
+                     && !row.markedUnread
+            name: "pin"
+            size: 16
         }
 
         Badge {
