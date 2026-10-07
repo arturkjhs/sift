@@ -200,8 +200,9 @@
   → `ui/privacy.py` (`privacy`): разделы Privacy/Storage и уведомления по типам чатов в настройках.
 - [ ] Прокси (SOCKS5, MTProto: `addProxy`, `enableProxy`).
 - [ ] Локализация интерфейса RU/UA/CZ (строки уже в `qsTr()`).
-- [ ] Транскрипция через TDLib `recognizeSpeech` для Premium-аккаунтов (бесплатно,
+- [x] Транскрипция через TDLib `recognizeSpeech` для Premium-аккаунтов (бесплатно,
   без OpenRouter).
+  → `AiService._recognize` (при `premium`), кнопка Transcribe и без «AI on».
 
 ---
 

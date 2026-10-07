@@ -1395,7 +1395,7 @@ Item {
         AppMenuItem {
             text: qsTr("Transcribe")
             iconName: "transcript"
-            visible: messageMenu.isVoice && !messageMenu.transcribed && ai.enabled
+            visible: messageMenu.isVoice && !messageMenu.transcribed && (ai.enabled || ai.premium)
             onTriggered: ai.transcribe(messageMenu.messageId)
         }
         AppMenuItem {

@@ -298,6 +298,37 @@ class AiServiceTest(unittest.IsolatedAsyncioTestCase):
         self.ai.transcribe(CHAT, 77)  # done: no second request
         self.assertEqual(len(self.router.requests), 1)
 
+    async def test_premium_transcribes_with_telegram(self) -> None:
+        from unittest import mock
+
+        state = {"asked": False}
+        server = self.lib._responder
+
+        def premium(req: dict[str, Any]) -> list[dict[str, Any]]:
+            if req["@type"] == "recognizeSpeech":
+                state["asked"] = True
+                return [ok(req)]
+            if req["@type"] == "getMessage" and req["message_id"] == 77:
+                result = ({"@type": "speechRecognitionResultText", "text": "see you at five"}
+                          if state["asked"] else None)
+                return [{**msg(77), "@extra": req["@extra"], "content": {
+                    "@type": "messageVoiceNote", "voice_note": {
+                        "duration": 2, "speech_recognition_result": result,
+                        "voice": _file(500, "")}}}]
+            return server(req)
+
+        self.lib._responder = premium
+        self.lib.push({"@type": "updateOption", "name": "my_id",
+                       "value": {"@type": "optionValueInteger", "value": "9"}})
+        self.lib.push({"@type": "updateUser", "user": {"id": 9, "first_name": "Me",
+                                                       "is_premium": True}})
+        await wait_until(lambda: self.ai.premium)
+        with mock.patch("tgclient.services.ai.RECOGNIZE_POLL", 0.01):
+            self.ai.transcribe(CHAT, 77)  # AI is off in this chat: Telegram does it anyway
+            await wait_until(lambda: self.ai.transcript(CHAT, 77).state == "done")
+        self.assertEqual(self.ai.transcript(CHAT, 77).text, "see you at five")
+        self.assertEqual(self.router.requests, [])  # nothing went to OpenRouter
+
     async def test_transcribe_rejects_non_voice(self) -> None:
         self.ai.set_enabled(CHAT, True)
         self.ai.transcribe(CHAT, 5)

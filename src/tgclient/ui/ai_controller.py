@@ -278,6 +278,11 @@ class AiController(QObject):
         return f"topic:{self._topic_id}" if self._topic_id else ""
 
     @Property(bool, notify=chatChanged)
+    def premium(self) -> bool:
+        """Voice messages can be transcribed by Telegram (Premium), AI on or off."""
+        return self._service.premium
+
+    @Property(bool, notify=chatChanged)
     def available(self) -> bool:
         """False for secret chats: AI can't be turned on there."""
         return self._service.allowed(self._chat_id)

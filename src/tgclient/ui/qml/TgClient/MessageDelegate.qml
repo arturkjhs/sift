@@ -83,7 +83,7 @@ Item {
     // Voice and file cards leave room on their right for the time instead of an extra line
     // (a voice transcript below the player takes that line, so the time moves under it).
     readonly property bool showTranscript: mediaKind === "voice"
-                                           && (transcriptState !== "" || ai.enabled)
+                                           && (transcriptState !== "" || ai.enabled || ai.premium)
     readonly property bool longTranscript: transcriptState === "done" || transcriptState === "error"
     readonly property bool timeBesideMedia: ["voice", "document", "audio"].indexOf(mediaKind) >= 0
                                            && html === "" && !(showTranscript && longTranscript)
@@ -500,7 +500,7 @@ Item {
                                                                    : Qt.ArrowCursor
                         }
                         TapHandler {
-                            enabled: transcriptText.actionable && ai.enabled
+                            enabled: transcriptText.actionable && (ai.enabled || ai.premium)
                             onTapped: ai.transcribe(root.messageId)
                         }
                     }

@@ -48,6 +48,8 @@ Listener = Callable[[ChangeKind, Any], None]
 Searcher = Callable[[str, int], Awaitable[list[Any]]]  # (query, chat_id) -> search hits
 
 MAX_VOICE_BYTES = 20 * 1024 * 1024
+RECOGNIZE_POLL = 1.0  # seconds between asking for Telegram's recognition result
+RECOGNIZE_TIMEOUT = 90.0
 TRANSCRIBE_PROMPT = (
     "Transcribe this voice message verbatim in its original language. "
     "Output only the transcript text, without quotes or comments. "
@@ -331,19 +333,68 @@ class AiService:
     def transcript(self, chat_id: int, message_id: int) -> Transcript | None:
         return self._transcripts.get((chat_id, message_id))
 
+    @property
+    def premium(self) -> bool:
+        """Telegram Premium: voice messages are transcribed by Telegram itself (free, the
+        audio never leaves Telegram), without OpenRouter and without AI turned on."""
+        me = self._users.me
+        return bool(me and me.is_premium)
+
     def transcribe(self, chat_id: int, message_id: int) -> None:
         """Start transcribing a voice message (no-op if done or running)."""
         key = (chat_id, message_id)
         current = self._transcripts.get(key)
         if current is not None and current.state in ("pending", "done"):
             return
-        try:
-            self._check(chat_id)
-        except AiUnavailable as e:
-            self._set_transcript(key, Transcript("error", str(e)))
-            return
+        premium = self.premium and self._chats.chats.get(chat_id) is not None
+        if not premium:
+            try:
+                self._check(chat_id)
+            except AiUnavailable as e:
+                self._set_transcript(key, Transcript("error", str(e)))
+                return
         self._set_transcript(key, Transcript("pending"))
-        self._spawn(self._transcribe(chat_id, message_id))
+        self._spawn(self._recognize(chat_id, message_id) if premium
+                    else self._transcribe(chat_id, message_id))
+
+    async def _recognize(self, chat_id: int, message_id: int) -> None:
+        """Telegram's own speech recognition (recognizeSpeech): the result arrives in the
+        message's voice_note.speech_recognition_result, asked for until it's there."""
+        key = (chat_id, message_id)
+        try:
+            text = await self._telegram_transcript(chat_id, message_id)
+        except TdError as e:
+            self._set_transcript(key, Transcript("error", f"Telegram: {e.message}"))
+            return
+        except TimeoutError:
+            self._set_transcript(key, Transcript("error", "Telegram didn't recognize it in time"))
+            return
+        text = text or "(no speech)"
+        self._store.transcripts[key] = text
+        self._set_transcript(key, Transcript("done", text))
+        await asyncio.to_thread(self._store.save_transcript, chat_id, message_id, text,
+                                "telegram")
+
+    async def _telegram_transcript(self, chat_id: int, message_id: int) -> str:
+        asked = False
+        for _ in range(int(RECOGNIZE_TIMEOUT / RECOGNIZE_POLL)):
+            message = await self._client.send({"@type": "getMessage", "chat_id": chat_id,
+                                               "message_id": message_id})
+            content = message.get("content", {})
+            media = content.get("voice_note") or content.get("video_note") or {}
+            result = media.get("speech_recognition_result") or {}
+            match result.get("@type"):
+                case "speechRecognitionResultText":
+                    return str(result.get("text", ""))
+                case "speechRecognitionResultError":
+                    error = result.get("error") or {}
+                    raise TdError(error.get("code", 400), error.get("message", "failed"))
+            if not asked:
+                await self._client.send({"@type": "recognizeSpeech", "chat_id": chat_id,
+                                         "message_id": message_id})
+                asked = True
+            await asyncio.sleep(RECOGNIZE_POLL)
+        raise TimeoutError
 
     async def _transcribe(self, chat_id: int, message_id: int) -> None:
         key = (chat_id, message_id)

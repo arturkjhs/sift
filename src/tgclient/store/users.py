@@ -21,6 +21,7 @@ class User:
     is_verified: bool = False
     phone: str = ""
     is_contact: bool = False
+    is_premium: bool = False
 
     @property
     def full_name(self) -> str:
@@ -71,6 +72,7 @@ class UserStore:
                              or raw.get("is_verified")),
             phone=raw.get("phone_number", ""),
             is_contact=bool(raw.get("is_contact")),
+            is_premium=bool(raw.get("is_premium")),
         )
         self._emit(raw["id"])
 
