@@ -21,7 +21,8 @@ Rectangle {
     signal cancelReply()
     signal sent()
 
-    function send() {
+    // extra: {silent: true} or {scheduleAt: unix time} from the Send button's menu
+    function send(extra) {
         if (root.editingId !== 0) {
             messages.saveEdit(root.editingId, input.text)
             root.finishEdit()
@@ -29,7 +30,8 @@ Rectangle {
         }
         if (input.text.trim().length === 0)
             return
-        messages.sendMessage(input.text, root.replyToId, composerModel.sendOptions())
+        messages.sendMessage(input.text, root.replyToId,
+                             Object.assign(composerModel.sendOptions(), extra || {}))
         input.clear()
         composerModel.sent()
         root.sent()
@@ -630,8 +632,34 @@ Rectangle {
                     opacity: sendButton.enabled ? (sendButton.down ? 0.85 : 1) : 0.4
                 }
                 onClicked: root.send()
+
+                TapHandler {  // right click: send silently or later
+                    acceptedButtons: Qt.RightButton
+                    enabled: root.editingId === 0
+                    onTapped: sendMenu.popup(sendButton, 0, -sendMenu.implicitHeight - 6)
+                }
             }
         }
+    }
+
+    AppMenu {
+        id: sendMenu
+        objectName: "sendMenu"
+        AppMenuItem {
+            text: qsTr("Send without sound")
+            iconName: "muted"
+            onTriggered: root.send({silent: true})
+        }
+        AppMenuItem {
+            text: qsTr("Schedule message\u2026")
+            iconName: "clock"
+            onTriggered: scheduleDialog.ask(0)
+        }
+    }
+
+    ScheduleDialog {
+        id: scheduleDialog
+        onPicked: (sendDate, messageId) => root.send({scheduleAt: sendDate})
     }
 
     SendFilesDialog {

@@ -85,6 +85,7 @@ class Chat:
     can_delete_for_all: bool = False  # private chats: clear history for both sides
     reply_markup_message_id: int = 0  # a bot's keyboard (replyMarkupShowKeyboard) is on it
     reply_markup_message: dict[str, Any] | None = None  # once known (updateChatReplyMarkup)
+    has_scheduled_messages: bool = False
 
 
 @dataclass
@@ -125,6 +126,7 @@ class ChatStore:
             "updateChatUnreadReactionCount": self._on_reaction_count,
             "updateChatIsMarkedAsUnread": self._on_marked_unread,
             "updateChatReplyMarkup": self._on_reply_markup,
+            "updateChatHasScheduledMessages": self._on_has_scheduled,
             "updateMessageUnreadReactions": self._on_reaction_count,
             "updateChatNotificationSettings": self._on_notification_settings,
             "updateScopeNotificationSettings": self._on_scope_settings,
@@ -251,6 +253,7 @@ class ChatStore:
             is_marked_as_unread=bool(raw.get("is_marked_as_unread")),
             can_delete_for_all=bool(raw.get("can_be_deleted_for_all_users")),
             reply_markup_message_id=int(raw.get("reply_markup_message_id") or 0),
+            has_scheduled_messages=bool(raw.get("has_scheduled_messages")),
         )
         self.chats[chat.id] = chat
         self._set_photo(chat, raw.get("photo"))
@@ -309,6 +312,10 @@ class ChatStore:
             event["chat_id"],
             lambda c: setattr(c, "unread_mention_count", event["unread_mention_count"]),
         )
+
+    def _on_has_scheduled(self, event: Event) -> None:
+        self._update_chat(event["chat_id"], lambda c: setattr(
+            c, "has_scheduled_messages", bool(event["has_scheduled_messages"])))
 
     def _on_reply_markup(self, event: Event) -> None:
         def apply(chat: Chat) -> None:

@@ -762,6 +762,31 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
                          and session.messages.rowOf(300) >= 0)
         self.assertEqual(warnings, [], "QML warnings with the jump buttons")
 
+        # Sending later: the Send button's menu, the time picker, the scheduled list
+        send_menu = window.findChild(QObject, "sendMenu")
+        QMetaObject.invokeMethod(send_menu, "popup")
+        await settle()
+        _screenshot(window, "send-menu")
+        QMetaObject.invokeMethod(send_menu, "close")
+        await settle(0.15)
+        schedule = window.findChild(QObject, "scheduleDialog")
+        QMetaObject.invokeMethod(schedule, "ask", Q_ARG("QVariant", 0))
+        await settle()
+        self.assertTrue(schedule.property("opened"))
+        _screenshot(window, "schedule")
+        QMetaObject.invokeMethod(schedule, "close")
+        await settle(0.15)
+        session.messages._scheduled = [{"messageId": 9001, "text": "Happy birthday! 🎉",
+                                        "when": "08.10 09:00", "date": 1}]
+        scheduled_list = window.findChild(QObject, "scheduledList")
+        QMetaObject.invokeMethod(scheduled_list, "open")
+        session.messages.scheduledChanged.emit()
+        await settle()
+        _screenshot(window, "scheduled")
+        QMetaObject.invokeMethod(scheduled_list, "close")
+        await settle(0.15)
+        self.assertEqual(warnings, [], "QML warnings when scheduling")
+
         # The chat list's context menu, and the confirmation before leaving
         chat_menu = window.findChild(QObject, "chatMenu")
         QMetaObject.invokeMethod(chat_menu, "openFor", Q_ARG("QVariant", 2),

@@ -247,6 +247,19 @@ Item {
                 spacing: 6
 
                 IconButton {
+                    objectName: "scheduledButton"
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: messages.hasScheduled
+                    iconName: "clock"
+                    glyphSize: 17
+                    Accessible.name: qsTr("Scheduled messages")
+                    ToolTip.visible: hovered
+                    ToolTip.delay: 600
+                    ToolTip.text: Accessible.name
+                    onClicked: scheduledList.show()
+                }
+
+                IconButton {
                     objectName: "chatSearchButton"
                     anchors.verticalCenter: parent.verticalCenter
                     visible: !messages.topicsMode
@@ -805,6 +818,16 @@ Item {
             id: toastTimer
             interval: 3000
         }
+    }
+
+    ScheduledList {
+        id: scheduledList
+        onRescheduleRequested: id => rescheduleDialog.ask(id)
+    }
+
+    ScheduleDialog {
+        id: rescheduleDialog
+        onPicked: (sendDate, messageId) => messages.reschedule(messageId, sendDate)
     }
 
     ConfirmDialog {

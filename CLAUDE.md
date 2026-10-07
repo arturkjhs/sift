@@ -459,6 +459,12 @@ src/tgclient/
   без себя, до 8) → попап над полем (↑/↓, Enter/Tab, клик). С username вставляется
   `@username`, без него — `[Имя](tg://user?id=N)`: после `parseMarkdown` `richtext.mention_names`
   превращает такую ссылку в `textEntityTypeMentionName` (человек получает упоминание).
+- Тихая и отложенная отправка: правый клик по «Send» → «Send without sound» / «Schedule
+  message…» (`ScheduleDialog`: быстрые варианты или дата и время) → `send({silent} |
+  {scheduleAt})` → `messageSendOptions`. Отложенные не попадают в ленту (`ChatHistory._mine`
+  отсекает `scheduling_state`); при `has_scheduled_messages` в шапке часы → `ScheduledList`
+  (`getChatScheduledMessages`; отправить сейчас = `editMessageSchedulingState(null)`,
+  перенести, удалить).
 - Отправка: текст проходит через TDLib `parseMarkdown` (**bold**, __italic__, `code`, ```pre```,
   ~~strike~~, ||spoiler||, [text](url)), при ошибке уходит как plain text.
 

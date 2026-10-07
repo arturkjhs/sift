@@ -35,3 +35,5 @@ LockWindow 1.0 LockWindow.qml
 ConfirmDialog 1.0 ConfirmDialog.qml
 ProfilePanel 1.0 ProfilePanel.qml
 PollContent 1.0 PollContent.qml
+ScheduleDialog 1.0 ScheduleDialog.qml
+ScheduledList 1.0 ScheduledList.qml

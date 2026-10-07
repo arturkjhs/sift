@@ -167,8 +167,9 @@
   → `store/keyboards.py`, роль `inlineKeyboard`, `messages.pressButton/replyKeyboard/sendKeyboardButton`, тост и окно ответа бота.
 - [x] **Комментарии к постам каналов** (обсуждение через связанную группу).
   → роль `comments` + полоса в пузыре, `messages.openComments/closeComments`, `ChatHistory(thread_id=)`.
-- [ ] **Отложенная и тихая отправка.** `messageSendOptions`: `disable_notification`,
+- [x] **Отложенная и тихая отправка.** `messageSendOptions`: `disable_notification`,
   `scheduling_state` с датой; список отложенных.
+  → меню кнопки «Send», `ScheduleDialog.qml`, `ScheduledList.qml`, `messages.loadScheduled/reschedule/sendScheduledNow/deleteScheduled`.
 - [ ] **Активные сессии.** `getActiveSessions`, `terminateSession`, «завершить все другие».
 - [x] **Вход по QR.** `requestQrCodeAuthentication`, состояние
   `authorizationStateWaitOtherDeviceConfirmation` → QR в окне логина.

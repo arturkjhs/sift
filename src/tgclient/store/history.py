@@ -364,8 +364,8 @@ class ChatHistory:
             message["id"] > self.messages[0]["id"])
 
     def _mine(self, message: Message) -> bool:
-        if message.get("chat_id") != self.chat_id:
-            return False
+        if message.get("chat_id") != self.chat_id or message.get("scheduling_state"):
+            return False  # scheduled messages aren't part of the history yet
         if self.thread_id:
             topic = message.get("topic_id") or {}
             return (message.get("id") == self.thread_id

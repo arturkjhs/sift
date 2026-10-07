@@ -217,6 +217,7 @@ class MessageListModel(QAbstractListModel):
     chatSearchChanged = Signal()
     botAnswer = Signal(str, bool)  # a bot's answer to a button: text, as an alert
     replyKeyboardChanged = Signal()
+    scheduledChanged = Signal()
     chatSearchJump = Signal("QVariant")  # a search result to show (QML jumps and flashes)
 
     def __init__(
@@ -242,6 +243,7 @@ class MessageListModel(QAbstractListModel):
         self._thread_return: tuple[int, int] | None = None  # comments: (channel, post) to go back
         self._keyboard_hidden = 0  # a one-time keyboard used (its message id), or closed
         self._keyboards_asked: set[tuple[int, int]] = set()
+        self._scheduled: list[dict[str, Any]] = []
         self._search_query = ""
         self._search_ids: list[int] = []  # results, newest first
         self._search_next = 0  # next_from_message_id for more results (0: no more)
@@ -569,6 +571,71 @@ class MessageListModel(QAbstractListModel):
         if self._history is not None:
             self._spawn(self._request({"@type": "unpinAllChatMessages",
                                        "chat_id": self._history.chat_id}, "Unpinning all"))
+
+    # --- scheduled messages -------------------------------------------------------------------
+
+    @Property(bool, notify=chatChanged)
+    def hasScheduled(self) -> bool:
+        chat = self._chat()
+        return bool(chat and chat.has_scheduled_messages)
+
+    @Property("QVariantList", notify=scheduledChanged)
+    def scheduled(self) -> list[dict[str, Any]]:
+        """{messageId, text, when} of the open chat's scheduled messages, soonest first."""
+        return list(self._scheduled)
+
+    @Slot()
+    def loadScheduled(self) -> None:
+        if self._history is not None:
+            self._spawn(self._load_scheduled(self._history.chat_id))
+
+    async def _load_scheduled(self, chat_id: int) -> None:
+        try:
+            found = await self._client.send({"@type": "getChatScheduledMessages",
+                                             "chat_id": chat_id})
+        except TdError as e:
+            log.info("getChatScheduledMessages failed: %s", e)
+            found = {}
+        if self._history is None or self._history.chat_id != chat_id:
+            return
+        rows = []
+        for message in found.get("messages") or []:
+            state = message.get("scheduling_state") or {}
+            date = int(state.get("send_date") or 0)
+            rows.append({"messageId": message["id"], "text": self._short_text(message),
+                         "when": (datetime.fromtimestamp(date).strftime("%d.%m %H:%M")  # noqa: DTZ006
+                                  if date else "when online"), "date": date})
+        rows.sort(key=lambda r: r["date"] or 2**31)
+        self._scheduled = rows
+        self.scheduledChanged.emit()
+
+    @Slot("QVariant")
+    def sendScheduledNow(self, message_id: Any) -> None:
+        self._edit_scheduled(message_id, None)
+
+    @Slot("QVariant", int)
+    def reschedule(self, message_id: Any, send_date: int) -> None:
+        self._edit_scheduled(message_id, {"@type": "messageSchedulingStateSendAtDate",
+                                          "send_date": int(send_date), "repeat_period": 0})
+
+    @Slot("QVariant")
+    def deleteScheduled(self, message_id: Any) -> None:
+        history = self._history
+        if history is not None:
+            self._spawn(self._after_scheduled_change(history.chat_id, {
+                "@type": "deleteMessages", "chat_id": history.chat_id,
+                "message_ids": [int(message_id)], "revoke": True}))
+
+    def _edit_scheduled(self, message_id: Any, state: dict[str, Any] | None) -> None:
+        history = self._history
+        if history is not None:
+            self._spawn(self._after_scheduled_change(history.chat_id, {
+                "@type": "editMessageSchedulingState", "chat_id": history.chat_id,
+                "message_id": int(message_id), "scheduling_state": state}))
+
+    async def _after_scheduled_change(self, chat_id: int, request: dict[str, Any]) -> None:
+        await self._request(request, request["@type"])
+        await self._load_scheduled(chat_id)
 
     # --- bot keyboards ------------------------------------------------------------------------
 
@@ -2194,6 +2261,7 @@ class MessageListModel(QAbstractListModel):
                     options: dict[str, Any] | None = None) -> None:
         options = options or {}
         formatted = await self._formatted(text)
+        send_options = _send_options(options)
         preview_options = ({"@type": "linkPreviewOptions", "is_disabled": True, "url": "",
                             "force_small_media": False, "force_large_media": False,
                             "show_above_text": False} if options.get("noPreview") else None)
@@ -2207,10 +2275,15 @@ class MessageListModel(QAbstractListModel):
         }
         if reply_to:
             request["reply_to"] = {"@type": "inputMessageReplyToMessage", "message_id": reply_to}
+        if send_options is not None:
+            request["options"] = send_options
         try:
             message = await self._client.send(request)
         except TdError as e:
             log.warning("sendMessage failed: %s", e)
+            return
+        if send_options is not None and send_options.get("scheduling_state"):
+            await self._load_scheduled(chat_id)
             return
         history = self._history
         if (history and history.chat_id == chat_id and message.get("id")
@@ -2223,6 +2296,17 @@ class MessageListModel(QAbstractListModel):
 
 
 _TAIL = "<!--time-->"
+
+
+def _send_options(options: dict[str, Any]) -> dict[str, Any] | None:
+    """messageSendOptions from the composer's {silent, scheduleAt}; None for the defaults."""
+    silent, at = bool(options.get("silent")), int(options.get("scheduleAt") or 0)
+    if not silent and not at:
+        return None
+    return {"@type": "messageSendOptions", "disable_notification": silent,
+            "from_background": False, "protect_content": False,
+            "scheduling_state": {"@type": "messageSchedulingStateSendAtDate", "send_date": at,
+                                 "repeat_period": 0} if at else None}
 
 
 def _invite_map(info: dict[str, Any]) -> dict[str, Any]:
