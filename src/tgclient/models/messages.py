@@ -209,6 +209,7 @@ class MessageListModel(QAbstractListModel):
     searchRequested = Signal(str)  # a hashtag clicked: search for it
     inviteReady = Signal("QVariantMap")  # an invite link to a chat the user isn't in
     joinRequested = Signal()  # joining needs an admin's approval
+    proxyLinkReady = Signal("QVariantMap")  # a proxy link: ask before using it
     latestChanged = Signal()
     countersChanged = Signal()
     selectionChanged = Signal()
@@ -1283,6 +1284,8 @@ class MessageListModel(QAbstractListModel):
                 self.searchRequested.emit(target.query)
             case "invite":
                 self.inviteReady.emit(_invite_map(target.invite))
+            case "proxy":
+                self.proxyLinkReady.emit(target.invite)
             case _ if not link.startswith("tg:"):
                 QDesktopServices.openUrl(QUrl(link))
 

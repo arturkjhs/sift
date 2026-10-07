@@ -65,6 +65,8 @@ async def resolve(client: TdClient, link: str) -> Target:
                 if info.get("chat_id"):  # set when the chat is readable: member or public
                     return Target("chat", chat_id=info["chat_id"])
                 return Target("invite", invite={**info, "link": invite})
+            case "internalLinkTypeProxy":
+                return Target("proxy", invite=dict(kind["proxy"]))
             case "internalLinkTypeSavedMessages":
                 me = await client.send({"@type": "getMe"})
                 return await _private_chat(client, me["id"])

@@ -15,6 +15,7 @@ Popup {
     onAboutToShow: {
         devices.refresh()
         privacy.load()
+        proxies.refresh()
     }
 
     background: Rectangle {
@@ -410,6 +411,152 @@ Popup {
                 iconName: "trash"
                 enabled: !privacy.busy
                 onClicked: privacy.clearCache()
+            }
+
+            SectionTitle {
+                objectName: "proxySection"
+                text: qsTr("Proxy")
+            }
+            Repeater {
+                model: proxies.list
+                RowLayout {
+                    id: proxyRow
+                    required property var modelData
+                    Layout.fillWidth: true
+                    spacing: 8
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 1
+                        Text {
+                            text: proxyRow.modelData.title
+                            textFormat: Text.PlainText
+                            color: Theme.text
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            text: proxyRow.modelData.kind.toUpperCase()
+                                  + (proxyRow.modelData.ping ? " \u00b7 " + proxyRow.modelData.ping
+                                                             : "")
+                            color: proxyRow.modelData.enabled ? Theme.accent : Theme.textMuted
+                            font.pixelSize: Theme.fontSmall
+                        }
+                    }
+                    PillButton {
+                        text: qsTr("Ping")
+                        onClicked: proxies.ping(proxyRow.modelData.id)
+                    }
+                    IconButton {
+                        iconName: "trash"
+                        Accessible.name: qsTr("Remove")
+                        onClicked: proxies.remove(proxyRow.modelData.id)
+                    }
+                    ToggleSwitch {
+                        checked: proxyRow.modelData.enabled
+                        onToggled: proxies.setEnabled(proxyRow.modelData.id, checked)
+                    }
+                }
+            }
+            ColumnLayout {
+                id: proxyForm
+                objectName: "proxyForm"
+                property bool editing: false
+                property string kind: "socks5"
+                property string error: ""
+                Layout.fillWidth: true
+                spacing: 6
+
+                component ProxyField: TextField {
+                    Layout.fillWidth: true
+                    color: Theme.text
+                    placeholderTextColor: Theme.textMuted
+                    font.pixelSize: Theme.fontBody
+                    padding: 8
+                    background: Rectangle {
+                        radius: 8
+                        color: Theme.field
+                        border.width: 1
+                        border.color: parent.activeFocus ? Theme.accent : Theme.fieldBorder
+                    }
+                }
+
+                Connections {
+                    target: proxies
+                    function onFailed(message) { proxyForm.error = message }
+                }
+                RowLayout {
+                    visible: proxyForm.editing
+                    spacing: 6
+                    Repeater {
+                        model: ["socks5", "mtproto", "http"]
+                        PillButton {
+                            required property string modelData
+                            text: modelData === "socks5" ? "SOCKS5"
+                                  : modelData === "mtproto" ? "MTProto" : "HTTP"
+                            filled: proxyForm.kind === modelData
+                            onClicked: proxyForm.kind = modelData
+                        }
+                    }
+                }
+                RowLayout {
+                    visible: proxyForm.editing
+                    spacing: 6
+                    ProxyField { id: proxyServer; objectName: "proxyServer"; placeholderText: qsTr("Server") }
+                    ProxyField {
+                        id: proxyPort
+                        Layout.fillWidth: false
+                        Layout.preferredWidth: 90
+                        placeholderText: qsTr("Port")
+                        validator: IntValidator { bottom: 1; top: 65535 }
+                    }
+                }
+                RowLayout {
+                    visible: proxyForm.editing && proxyForm.kind !== "mtproto"
+                    spacing: 6
+                    ProxyField { id: proxyUser; placeholderText: qsTr("Username (optional)") }
+                    ProxyField {
+                        id: proxyPassword
+                        placeholderText: qsTr("Password (optional)")
+                        echoMode: TextInput.Password
+                    }
+                }
+                ProxyField {
+                    id: proxySecret
+                    visible: proxyForm.editing && proxyForm.kind === "mtproto"
+                    placeholderText: qsTr("Secret")
+                }
+                Text {
+                    visible: proxyForm.error !== ""
+                    text: proxyForm.error
+                    color: Theme.danger
+                    font.pixelSize: Theme.fontSmall
+                }
+                RowLayout {
+                    spacing: 6
+                    PillButton {
+                        visible: !proxyForm.editing
+                        text: qsTr("Add proxy")
+                        onClicked: proxyForm.editing = true
+                    }
+                    PillButton {
+                        visible: proxyForm.editing
+                        text: qsTr("Cancel")
+                        onClicked: proxyForm.editing = false
+                    }
+                    PillButton {
+                        objectName: "saveProxy"
+                        visible: proxyForm.editing
+                        filled: true
+                        text: qsTr("Add and use")
+                        onClicked: {
+                            proxyForm.error = ""
+                            proxies.add(proxyForm.kind, proxyServer.text,
+                                        parseInt(proxyPort.text) || 0, proxyUser.text,
+                                        proxyPassword.text, proxySecret.text)
+                            proxyForm.editing = false
+                        }
+                    }
+                }
             }
 
             SectionTitle {

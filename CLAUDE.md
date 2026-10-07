@@ -472,6 +472,10 @@ src/tgclient/
   «Add members» (`addChatMembers`), правка имени/описания, удаление (владелец, `deleteChat`);
   правый клик по участнику — админ (`setChatMemberStatus` с `ADMIN_RIGHTS`, без права
   назначать других) / снять / удалить (`banChatMember`).
+- Прокси (`ProxyController` = `proxies`, Settings → Proxy): SOCKS5/MTProto/HTTP — `addProxy`
+  (сразу включается), вкл/выкл (`enableProxy`/`disableProxy`), `pingProxy`, `removeProxy`;
+  список хранит сам TDLib. Ссылки `tg://proxy`/`t.me/proxy` (`internalLinkTypeProxy`) →
+  `proxyLinkReady` → подтверждение → `addFromLink`.
 - Приватность/хранилище (`PrivacyController` = `privacy`, грузится при открытии настроек):
   правило «All/Contacts/Nobody» заменяет только главное правило, исключения для людей и чатов
   сохраняются (`with_main_rule`); уведомления по типам чатов — `setScopeNotificationSettings`

@@ -111,6 +111,11 @@ Item {
                 toast.show(text)
         }
         function onInviteReady(info) { inviteDialog.show(info) }
+        function onProxyLinkReady(proxy) {
+            proxyConfirm.ask(qsTr("Use the proxy %1:%2?").arg(proxy.server).arg(proxy.port),
+                             qsTr("Telegram traffic will go through it. You can turn it off "
+                                  + "in Settings \u2192 Proxy."), qsTr("Use proxy"), "", proxy)
+        }
         function onJoinRequested() { joinNotice.visible = true }
         function onLinkResolved(chatId, messageId) {
             if (chatId !== messages.chatId)
@@ -865,6 +870,12 @@ Item {
     ScheduleDialog {
         id: rescheduleDialog
         onPicked: (sendDate, messageId) => messages.reschedule(messageId, sendDate)
+    }
+
+    ConfirmDialog {
+        id: proxyConfirm
+        danger: false
+        onAccepted: (checked, proxy) => proxies.addFromLink(proxy)
     }
 
     ConfirmDialog {

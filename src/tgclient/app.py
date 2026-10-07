@@ -57,6 +57,7 @@ from .ui.devices import DevicesController
 from .ui.folders import FolderEditor
 from .ui.group_admin import GroupAdmin
 from .ui.privacy import PrivacyController
+from .ui.proxy import ProxyController
 from .ui.icons import IconProvider
 from .ui.lock import LockController
 from .ui.images import TdImageProvider
@@ -145,6 +146,7 @@ class Session:
         self.folder_editor = FolderEditor(self.client, self.chats)
         self.contacts = ContactsModel(self.client, self.users, self.files, self.presence)
         self.group_admin = GroupAdmin(self.client, self.chats, self.presence)
+        self.proxies = ProxyController(self.client)
         self.privacy = PrivacyController(self.client,
                                          [settings.ai_db_path, settings.search_db_path])
         self.folders = FolderModel(self.chats)
@@ -424,6 +426,7 @@ def bind_session(engine: QQmlApplicationEngine, images: TdImageProvider,
     context.setContextProperty("contacts", session.contacts)
     context.setContextProperty("groupAdmin", session.group_admin)
     context.setContextProperty("privacy", session.privacy)
+    context.setContextProperty("proxies", session.proxies)
     context.setContextProperty("folders", session.folders)
     context.setContextProperty("messages", session.messages)
     context.setContextProperty("topics", session.topics)

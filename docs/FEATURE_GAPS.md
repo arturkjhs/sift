@@ -198,7 +198,8 @@
   уведомлений по типам чатов, хранилище и очистка кэша (`getStorageStatistics`,
   `optimizeStorage`).
   → `ui/privacy.py` (`privacy`): разделы Privacy/Storage и уведомления по типам чатов в настройках.
-- [ ] Прокси (SOCKS5, MTProto: `addProxy`, `enableProxy`).
+- [x] Прокси (SOCKS5, MTProto: `addProxy`, `enableProxy`).
+  → `ui/proxy.py` (`proxies`), раздел Proxy в настройках, proxy-ссылки с подтверждением.
 - [ ] Локализация интерфейса RU/UA/CZ (строки уже в `qsTr()`).
 - [x] Транскрипция через TDLib `recognizeSpeech` для Premium-аккаунтов (бесплатно,
   без OpenRouter).
