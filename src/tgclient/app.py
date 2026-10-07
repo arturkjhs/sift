@@ -36,7 +36,7 @@ from .services.openrouter import OpenRouter, mask_key
 from .services.search import SearchService
 from .services.search_index import SearchIndex
 from .services.updates import UpdateChecker
-from .store.chats import MAIN, ChatStore
+from .store.chats import ARCHIVE, MAIN, ChatStore
 from .store.custom_emoji import CustomEmojiStore
 from .store.emoji import EmojiCatalog
 from .store.files import FileManager
@@ -52,6 +52,7 @@ from .ui.animation import register_qml_types
 from .ui.auth_controller import AuthController
 from .ui.chat_actions import ChatActions
 from .ui.devices import DevicesController
+from .ui.folders import FolderEditor
 from .ui.icons import IconProvider
 from .ui.lock import LockController
 from .ui.images import TdImageProvider
@@ -135,6 +136,7 @@ class Session:
         self.chat_actions = ChatActions(self.client, self.chats)
         self.profile = ProfileModel(self.client, self.chats, self.users, self.presence)
         self.devices = DevicesController(self.client)
+        self.folder_editor = FolderEditor(self.client, self.chats)
         self.folders = FolderModel(self.chats)
         if router is None and settings.openrouter_api_key:
             router = OpenRouter(settings.openrouter_api_key)
@@ -250,6 +252,7 @@ class Session:
             self._seal_task = asyncio.ensure_future(self._seal_periodically())
         self.auth.set_ready()
         self.chat_list.setList(MAIN)
+        asyncio.ensure_future(self.chats.load_more(ARCHIVE, 20))  # for the archive row
         self.search_service.start()
         await self.notifications.start()
 
@@ -402,6 +405,7 @@ def bind_session(engine: QQmlApplicationEngine, images: TdImageProvider,
     context.setContextProperty("chatActions", session.chat_actions)
     context.setContextProperty("profile", session.profile)
     context.setContextProperty("devices", session.devices)
+    context.setContextProperty("folderEditor", session.folder_editor)
     context.setContextProperty("folders", session.folders)
     context.setContextProperty("messages", session.messages)
     context.setContextProperty("topics", session.topics)

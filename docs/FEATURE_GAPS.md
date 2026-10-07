@@ -182,8 +182,9 @@
 
 - [x] Мультиаккаунт (`TdHub` готов; раздельные `data_dir`, переключатель в UI).
   → M9: `ui/accounts.py`, `AccountSwitcher.qml`.
-- [ ] Создание и редактирование папок (`createChatFolder`, `editChatFolder`,
+- [x] Создание и редактирование папок (`createChatFolder`, `editChatFolder`,
   `reorderChatFolders`); архив строкой вверху списка вместо вкладки.
+  → `ui/folders.py` + `FolderEditorDialog.qml`, меню вкладок в `FolderTabs.qml`; строка «Archived chats» в `MainView.qml`.
 - [x] Анимированные стикеры (rlottie для TGS, WebM через QtMultimedia), GIF с автоплеем,
   кастомные эмодзи (`getCustomEmojiStickers`).
   → M9: `ui/animation.py`, `store/custom_emoji.py` (анимированные кастомные эмодзи — первым кадром).

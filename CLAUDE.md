@@ -438,6 +438,13 @@ src/tgclient/
   `getSupergroupFullInfo`/`getBasicGroupFullInfo`, участники (`searchChatMembers`, владелец и
   админы первыми). Вкладки Media/Files/Links/Voice — `searchChatMessages` с фильтрами, по 50,
   догрузка у конца. Картинки строк ждут загрузки через `_pending` (file id → строки).
+- Папки: вкладки — только папки TDLib и «All chats» (`FolderModel`); архив — строка-шапка
+  списка «Archived chats» (`chatList.archiveCount/archiveUnread/archivePreview`, число чатов из
+  `updateUnreadChatCount.total_count`, при старте грузятся 20 архивных), внутри архива — «←
+  Archive». Правый клик по вкладке / кнопка-папка: `FolderEditor` (`folderEditor`) —
+  `getChatFolder` → `FolderEditorDialog` (имя ≤ 12, типы чатов, выбранные чаты) →
+  `createChatFolder`/`editChatFolder` (иконка, цвет, исключённые чаты сохраняются как были),
+  `deleteChatFolder`, «Move left/right» — `reorderChatFolders` с позицией «All chats».
 - Меню чата в списке (правый клик): `ChatActions` (`chatActions` в QML) — закрепить
   (`toggleChatIsPinned` в текущем списке), mute на 1 ч / 8 ч / 2 дня / навсегда
   (`setChatNotificationSettings`: полный объект настроек чата из `Chat.notification_settings`,
@@ -635,7 +642,6 @@ uv run python -m unittest discover -s tests
   домен/GitHub для app id).
 - Мультиаккаунт: порядок аккаунтов перетаскиванием, Cmd/Ctrl+1…5, отдельные настройки на
   аккаунт (сейчас prefs общие), выход из всех сразу.
-- Список чатов: архив как строка вверху списка вместо вкладки.
 - Уведомления: ответ прямо из уведомления (macOS `UNTextInputNotificationAction`, Linux
   `inline-reply`), звук по чату (`notification_sound_id`), уведомления о реакциях на свои
   сообщения и о звонках; бейдж во Flatpak (Unity LauncherEntry через песочницу) не проверен.

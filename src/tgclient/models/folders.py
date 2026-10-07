@@ -1,4 +1,5 @@
-"""Qt model of folder tabs: the user's chat folders (with "All chats" in place) plus Archive."""
+"""Qt model of folder tabs: the user's chat folders, with "All chats" in place. The archive is a
+row at the top of the main list (ChatListModel), not a tab."""
 
 from __future__ import annotations
 
@@ -7,7 +8,7 @@ from typing import Any
 
 from PySide6.QtCore import QAbstractListModel, QByteArray, QModelIndex, QPersistentModelIndex, Qt
 
-from ..store.chats import ARCHIVE, ChatStore, Folder
+from ..store.chats import ChatStore, Folder
 
 AnyIndex = QModelIndex | QPersistentModelIndex
 
@@ -46,7 +47,7 @@ class FolderModel(QAbstractListModel):
         return None
 
     def _build(self) -> list[Folder]:
-        return [*self._store.folders, Folder(key=ARCHIVE, title="Archive")]
+        return list(self._store.folders)
 
     def _on_store_change(self, kind: str, payload: Any) -> None:
         if kind == "folders":

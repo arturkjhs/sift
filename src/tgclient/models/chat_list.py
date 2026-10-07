@@ -22,7 +22,7 @@ from PySide6.QtCore import (
     Slot,
 )
 
-from ..store.chats import MAIN, ChatStore, draft_text
+from ..store.chats import ARCHIVE, MAIN, ChatStore, draft_text
 from ..store.format import initials, message_preview, message_time
 from ..store.presence import PresenceStore, typing_text
 from ..store.users import UserStore
@@ -56,6 +56,7 @@ class Role(IntEnum):
 class ChatListModel(QAbstractListModel):
     listKeyChanged = Signal()
     fullyLoadedChanged = Signal()
+    archiveChanged = Signal()
 
     def __init__(
         self, store: ChatStore, users: UserStore, presence: PresenceStore | None = None,
@@ -77,6 +78,21 @@ class ChatListModel(QAbstractListModel):
     @Property(str, notify=listKeyChanged)
     def listKey(self) -> str:
         return self._list_key
+
+    @Property(int, notify=archiveChanged)
+    def archiveCount(self) -> int:
+        """Chats in the archive (the row at the top of the main list shows when > 0)."""
+        return max(self._store.total_chats.get(ARCHIVE, 0),
+                   len(self._store.chats_in(ARCHIVE)))
+
+    @Property(int, notify=archiveChanged)
+    def archiveUnread(self) -> int:
+        return self._store.unread.get(ARCHIVE, 0)
+
+    @Property(str, notify=archiveChanged)
+    def archivePreview(self) -> str:
+        """Titles of the newest archived chats."""
+        return ", ".join(c.title for c in self._store.chats_in(ARCHIVE)[:4])
 
     @Property(bool, notify=fullyLoadedChanged)
     def fullyLoaded(self) -> bool:
@@ -209,6 +225,11 @@ class ChatListModel(QAbstractListModel):
     def _on_store_change(self, kind: str, payload: Any) -> None:
         if kind == "chat":
             self._sync_chat(payload)
+            chat = self._store.chats.get(payload)
+            if chat is not None and ARCHIVE in chat.positions:
+                self.archiveChanged.emit()
+        elif kind == "unread" and payload == ARCHIVE:
+            self.archiveChanged.emit()
 
     def _sync_chat(self, chat_id: int) -> None:
         new_key = self._key_for(chat_id)

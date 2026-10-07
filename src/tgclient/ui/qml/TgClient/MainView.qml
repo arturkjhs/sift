@@ -99,6 +99,7 @@ SplitView {
                     chatList.setList(key)
                     list.positionViewAtBeginning()
                 }
+                onEditRequested: key => folderDialog.editFolder(key)
             }
 
             Rectangle {
@@ -236,6 +237,87 @@ SplitView {
 
                 ScrollBar.vertical: ScrollBar {}
 
+                // The archive: a row on top of all chats; inside it, a way back.
+                header: Rectangle {
+                    id: archiveRow
+                    objectName: "archiveRow"
+                    readonly property bool inArchive: chatList.listKey === "archive"
+                    width: ListView.view.width
+                    height: inArchive || (chatList.listKey === "main" && chatList.archiveCount > 0)
+                            ? (inArchive ? 44 : 64) : 0
+                    visible: height > 0
+                    color: archiveHover.hovered ? Theme.hover : "transparent"
+                    HoverHandler { id: archiveHover; cursorShape: Qt.PointingHandCursor }
+                    TapHandler {
+                        onTapped: {
+                            chatList.setList(archiveRow.inArchive ? "main" : "archive")
+                            list.positionViewAtBeginning()
+                        }
+                    }
+                    Rectangle {
+                        id: archiveIcon
+                        x: archiveRow.inArchive ? 12 : 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        width: archiveRow.inArchive ? 28 : 44
+                        height: width
+                        radius: width / 2
+                        color: archiveRow.inArchive ? "transparent" : Theme.pill
+                        Icon {
+                            anchors.centerIn: parent
+                            name: archiveRow.inArchive ? "back" : "inbox"
+                            size: archiveRow.inArchive ? 18 : 22
+                        }
+                    }
+                    Column {
+                        anchors.left: archiveIcon.right
+                        anchors.leftMargin: 10
+                        anchors.right: archiveBadge.left
+                        anchors.rightMargin: 8
+                        anchors.verticalCenter: parent.verticalCenter
+                        Text {
+                            text: archiveRow.inArchive ? qsTr("Archive") : qsTr("Archived chats")
+                            color: Theme.text
+                            font.pixelSize: Theme.fontTitle
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            width: parent.width
+                            visible: !archiveRow.inArchive && text !== ""
+                            text: chatList.archivePreview
+                            textFormat: Text.PlainText
+                            elide: Text.ElideRight
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontBody
+                        }
+                    }
+                    Rectangle {
+                        id: archiveBadge
+                        anchors.right: parent.right
+                        anchors.rightMargin: 12
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: !archiveRow.inArchive && chatList.archiveUnread > 0
+                        height: 20
+                        width: Math.max(20, archiveCount.implicitWidth + 12)
+                        radius: 10
+                        color: Theme.badgeMuted
+                        Text {
+                            id: archiveCount
+                            anchors.centerIn: parent
+                            text: chatList.archiveUnread
+                            color: Theme.textOnAccent
+                            font.pixelSize: 11
+                            font.weight: Font.Bold
+                        }
+                    }
+                    Rectangle {
+                        anchors.bottom: parent.bottom
+                        width: parent.width
+                        height: 1
+                        color: Theme.separator
+                        visible: archiveRow.inArchive
+                    }
+                }
+
                 Text {
                     anchors.centerIn: parent
                     visible: list.count === 0 && chatList.fullyLoaded
@@ -342,6 +424,10 @@ SplitView {
                     ? qsTr("Also for %1").arg(chatMenu.chatTitle) : "",
                 {action: "leave", chatId: chatMenu.chatId})
         }
+    }
+
+    FolderEditorDialog {
+        id: folderDialog
     }
 
     ConfirmDialog {

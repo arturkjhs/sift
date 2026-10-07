@@ -792,6 +792,25 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         await settle(0.15)
         self.assertEqual(warnings, [], "QML warnings when scheduling")
 
+        # Folders: the editor; the archive as a row on top of all chats
+        folder_dialog = window.findChild(QObject, "folderEditorDialog")
+        session.folder_editor.edit("")
+        await settle()
+        self.assertTrue(folder_dialog.property("opened"))
+        _screenshot(window, "folder-editor")
+        QMetaObject.invokeMethod(folder_dialog, "close")
+        await settle(0.15)
+        session.client._dispatch({"@type": "updateUnreadChatCount",
+                                  "chat_list": {"@type": "chatListArchive"}, "total_count": 3,
+                                  "unread_count": 1, "unread_unmuted_count": 1})
+        session.chat_list.setList("main")
+        await settle(0.1)
+        archive_row = next(i for i in _all_items(window.contentItem())
+                           if i.objectName() == "archiveRow")
+        self.assertGreater(archive_row.height(), 0)
+        _screenshot(window, "archive-row")
+        self.assertEqual(warnings, [], "QML warnings with folders")
+
         # The chat list's context menu, and the confirmation before leaving
         chat_menu = window.findChild(QObject, "chatMenu")
         QMetaObject.invokeMethod(chat_menu, "openFor", Q_ARG("QVariant", 2),

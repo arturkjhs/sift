@@ -105,6 +105,8 @@ class ChatStore:
         self.folders: list[Folder] = [Folder(key=MAIN, title="All chats")]
         self.unread: dict[str, int] = {}  # list key -> unread unmuted chats
         self.unread_messages: dict[str, int] = {}  # list key -> unread unmuted messages
+        self.total_chats: dict[str, int] = {}  # list key -> chats in it (TDLib's count)
+        self.main_position = 0  # where "All chats" stands among the folders
         self._scope_mute_for: dict[str, int] = {}
         self._file_owners: dict[int, set[int]] = {}  # file id -> chat ids using it as photo
         self._loading: set[str] = set()
@@ -356,6 +358,7 @@ class ChatStore:
             for info in event.get("chat_folders", [])
         ]
         main_index = min(event.get("main_chat_list_position", 0), len(folders))
+        self.main_position = main_index
         folders.insert(main_index, Folder(key=MAIN, title="All chats"))
         self.folders = folders
         self._emit("folders")
@@ -363,6 +366,7 @@ class ChatStore:
     def _on_unread_chat_count(self, event: Event) -> None:
         key = list_key(event["chat_list"])
         self.unread[key] = event.get("unread_unmuted_count", 0)
+        self.total_chats[key] = event.get("total_count", 0)
         self._emit("unread", key)
 
     def _on_unread_message_count(self, event: Event) -> None:
