@@ -288,5 +288,23 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.warnings, [], "QML warnings with bot keyboards")
 
 
+    async def test_channel_post_comments(self) -> None:
+        import test_comments
+
+        self.session.client._dispatch(new_chat(test_comments.CHANNEL, "News", 40,
+                                               "chatTypeSupergroup", is_channel=True))
+        self.open_chat(test_comments.CHANNEL)
+        await self.settle(0.1)
+        for mid, count in ((20, 3), (21, 0)):
+            self.session.client._dispatch({"@type": "updateNewMessage",
+                                           "message": test_comments.post(mid, count)})
+        await self.settle()
+        bars = [i for i in _all_items(self.window.contentItem())
+                if i.objectName() == "commentsBar" and i.isVisible()]
+        self.assertEqual(len(bars), 2)
+        _screenshot(self.window, "comments")
+        self.assertEqual(self.warnings, [], "QML warnings with comments")
+
+
 if __name__ == "__main__":
     unittest.main()

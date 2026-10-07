@@ -165,7 +165,8 @@
 - [x] **Кнопки ботов.** Inline-клавиатура (`getCallbackQueryAnswer`, url-кнопки), обычная
   клавиатура бота над полем ввода.
   → `store/keyboards.py`, роль `inlineKeyboard`, `messages.pressButton/replyKeyboard/sendKeyboardButton`, тост и окно ответа бота.
-- [ ] **Комментарии к постам каналов** (обсуждение через связанную группу).
+- [x] **Комментарии к постам каналов** (обсуждение через связанную группу).
+  → роль `comments` + полоса в пузыре, `messages.openComments/closeComments`, `ChatHistory(thread_id=)`.
 - [ ] **Отложенная и тихая отправка.** `messageSendOptions`: `disable_notification`,
   `scheduling_state` с датой; список отложенных.
 - [ ] **Активные сессии.** `getActiveSessions`, `terminateSession`, «завершить все другие».

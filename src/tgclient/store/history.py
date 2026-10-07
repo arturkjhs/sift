@@ -58,13 +58,17 @@ class ChatHistory:
     def __init__(
         self, client: TdClient, chat_id: int, listener: HistoryListener | None = None,
         last_message_id: Callable[[], int] | None = None, topic_id: int = 0,
+        thread_id: int = 0,
     ) -> None:
         """`last_message_id`: the chat's newest message (ChatStore), to know when a window
         loaded around an old message has reached it; without it, a short page means so.
-        `topic_id`: only this forum topic (getForumTopicHistory, live messages filtered)."""
+        `topic_id`: only this forum topic (getForumTopicHistory, live messages filtered).
+        `thread_id`: only the replies to this message (comments to a channel post in its
+        discussion group: getMessageThreadHistory)."""
         self._client = client
         self.chat_id = chat_id
         self.topic_id = topic_id
+        self.thread_id = thread_id
         self._last_message_id = last_message_id or (lambda: 0)
         self.messages: list[Message] = []
         self._keys: list[int] = []  # -message_id, ascending == newest first
@@ -267,6 +271,10 @@ class ChatHistory:
             request = {"@type": "getForumTopicHistory", "chat_id": self.chat_id,
                        "forum_topic_id": self.topic_id, "from_message_id": from_id,
                        "offset": offset, "limit": limit or self.PAGE}
+        elif self.thread_id:
+            request = {"@type": "getMessageThreadHistory", "chat_id": self.chat_id,
+                       "message_id": self.thread_id, "from_message_id": from_id,
+                       "offset": offset, "limit": limit or self.PAGE}
         try:
             result = await self._client.send(request)
         except TdError as e:
@@ -356,8 +364,14 @@ class ChatHistory:
             message["id"] > self.messages[0]["id"])
 
     def _mine(self, message: Message) -> bool:
-        return message.get("chat_id") == self.chat_id and (
-            not self.topic_id or message_topic_id(message) == self.topic_id)
+        if message.get("chat_id") != self.chat_id:
+            return False
+        if self.thread_id:
+            topic = message.get("topic_id") or {}
+            return (message.get("id") == self.thread_id
+                    or topic.get("message_thread_id") == self.thread_id
+                    or (message.get("reply_to") or {}).get("message_id") == self.thread_id)
+        return not self.topic_id or message_topic_id(message) == self.topic_id
 
     def _on_new_message(self, event: Event) -> None:
         message = event["message"]

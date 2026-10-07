@@ -415,6 +415,11 @@ src/tgclient/
   шаг — `chatSearchJump(id)` → `showMessage`. Совпадения в тексте подсвечивает
   `richtext.highlight_html` (только вне тегов; метка времени вставляется после — через
   `_TAIL`-заглушку, иначе подсвечивались бы её цифры).
+- Комментарии к постам канала: роль `comments` (`interaction_info.reply_info.reply_count`, -1 —
+  комментариев нет) → полоса в пузыре; клик — `messages.openComments` → `getMessageThread` →
+  модель переключается на группу обсуждения с `ChatHistory(thread_id=)`
+  (`getMessageThreadHistory`, живые — по `topic_id.message_thread_id`), всё отправляется с
+  `topic_id: messageTopicThread`; «назад» — `closeComments` (открыть канал и прыгнуть к посту).
 - Кнопки ботов: роль `inlineKeyboard` → ряды кнопок под пузырём (`messages.pressButton`):
   URL/LoginUrl/User — `openLink`, Callback — `getCallbackQueryAnswer` (ответ — тост или окно
   при `show_alert`, `url` — открыть), CopyText — буфер; игры, WebApp, оплата и т.п. — тост «только

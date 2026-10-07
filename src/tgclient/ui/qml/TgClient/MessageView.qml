@@ -188,11 +188,12 @@ Item {
                 objectName: "topicBack"
                 x: 8
                 anchors.verticalCenter: parent.verticalCenter
-                visible: messages.topicId !== 0
+                visible: messages.topicId !== 0 || messages.threadMode
                 iconName: "back"
                 glyphSize: 16
-                Accessible.name: qsTr("All topics")
-                onClicked: messages.closeTopic()
+                Accessible.name: messages.threadMode ? qsTr("Back to the channel")
+                                                     : qsTr("All topics")
+                onClicked: messages.threadMode ? messages.closeComments() : messages.closeTopic()
             }
 
             Column {
@@ -212,8 +213,9 @@ Item {
 
                 Text {
                     width: parent.width
-                    text: messages.topicId !== 0 && messages.topicName !== "" ? messages.topicName
-                                                                              : messages.chatTitle
+                    text: messages.threadMode ? qsTr("Comments")
+                          : messages.topicId !== 0 && messages.topicName !== ""
+                            ? messages.topicName : messages.chatTitle
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
                     color: Theme.text
@@ -223,7 +225,8 @@ Item {
                 Text {
                     objectName: "chatStatus"
                     width: parent.width
-                    text: messages.topicId !== 0 ? messages.chatTitle
+                    text: messages.threadMode ? messages.threadChannelTitle
+                          : messages.topicId !== 0 ? messages.chatTitle
                           : messages.topicsMode ? (topicList.count === 1 ? qsTr("1 topic")
                                                    : qsTr("%1 topics").arg(topicList.count))
                           : messages.chatStatus !== "" ? messages.chatStatus
@@ -498,6 +501,7 @@ Item {
                     onSelectToggled: (id, range) => range ? messages.selectRange(id)
                                                           : messages.toggleSelected(id)
                     onButtonPressed: (id, row, column) => messages.pressButton(id, row, column)
+                    onCommentsRequested: id => messages.openComments(id)
                     onReactRequested: (id, button) => {
                         const at = button.mapToItem(Overlay.overlay, 0, 0)
                         reactionPicker.waitingFor = id

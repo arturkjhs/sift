@@ -131,6 +131,7 @@ class Role(IntEnum):
     LinkPreview = auto()  # {url, site, title, text, image, width, height, large, label} or {}
     Poll = auto()  # store.polls.poll_view: a poll, quiz or checklist; {} otherwise
     InlineKeyboard = auto()  # a bot's buttons under the message: [[{text, kind, ...}]]
+    Comments = auto()  # a channel post's comment count; -1: no comments
 
 
 # Roles that depend on file state (refreshed when a file of the message changes).
@@ -238,6 +239,7 @@ class MessageListModel(QAbstractListModel):
         self._first_unread = 0  # message showing the "Unread messages" separator
         self._at_latest = True
         self._pinned: PinnedMessages | None = None
+        self._thread_return: tuple[int, int] | None = None  # comments: (channel, post) to go back
         self._keyboard_hidden = 0  # a one-time keyboard used (its message id), or closed
         self._keyboards_asked: set[tuple[int, int]] = set()
         self._search_query = ""
@@ -820,11 +822,13 @@ class MessageListModel(QAbstractListModel):
         self._stop()
         self._start(history.chat_id, TOPIC_LIST)
 
-    def _start(self, chat_id: int, topic_id: int) -> None:
+    def _start(self, chat_id: int, topic_id: int, thread_id: int = 0,
+               thread_unread_after: int = 0) -> None:
         ref: list[ChatHistory] = []
         history = ChatHistory(self._client, chat_id, _Adapter(self, ref),
-                              last_message_id=lambda: self._last_message_id(chat_id, topic_id),
-                              topic_id=topic_id)
+                              last_message_id=(lambda: 0) if thread_id
+                              else lambda: self._last_message_id(chat_id, topic_id),
+                              topic_id=topic_id, thread_id=thread_id)
         ref.append(history)
         self.beginResetModel()
         self._history = history
@@ -837,6 +841,8 @@ class MessageListModel(QAbstractListModel):
         if topic is not None:
             self._unread_after = (topic.last_read_inbox_message_id
                                   if topic.unread_count > 0 else 0)
+        elif thread_id:
+            self._unread_after = thread_unread_after
         else:
             self._unread_after = (chat.last_read_inbox_message_id
                                   if chat and chat.unread_count > 0
@@ -856,10 +862,12 @@ class MessageListModel(QAbstractListModel):
         self._sync_latest()
         if topic_id == TOPIC_LIST:
             return
+        self._spawn(self._run_load(history, self._load_initial(history)))
+        if thread_id:
+            return  # comments have no pinned bar
         self._pinned = PinnedMessages(self._client, chat_id, self.pinnedChanged.emit,
                                       topic_obj(topic_id))
         self.pinnedChanged.emit()
-        self._spawn(self._run_load(history, self._load_initial(history)))
         self._spawn(self._pinned.load())
 
     def _stop(self) -> None:
@@ -876,6 +884,7 @@ class MessageListModel(QAbstractListModel):
         if self._history is None:
             return
         history = self._history
+        self._thread_return = None
         self._stop()
         self.beginResetModel()
         self._history = None
@@ -885,6 +894,51 @@ class MessageListModel(QAbstractListModel):
         self.endResetModel()
         self.chatChanged.emit()
         self._spawn(self._client.send({"@type": "closeChat", "chat_id": history.chat_id}))
+
+    # --- comments to channel posts ---------------------------------------------------------
+
+    @Property(bool, notify=chatChanged)
+    def threadMode(self) -> bool:
+        """The comments of a channel post are shown (its discussion group's thread)."""
+        return self._history is not None and self._history.thread_id != 0
+
+    @Property(str, notify=chatChanged)
+    def threadChannelTitle(self) -> str:
+        channel = self._chats.chats.get(self._thread_return[0]) if self._thread_return else None
+        return channel.title if channel else ""
+
+    @Slot("QVariant")
+    def openComments(self, message_id: Any) -> None:
+        history = self._history
+        if history is not None and message_id:
+            self._spawn(self._open_comments(history.chat_id, int(message_id)))
+
+    async def _open_comments(self, chat_id: int, message_id: int) -> None:
+        try:
+            info = await self._client.send({"@type": "getMessageThread", "chat_id": chat_id,
+                                            "message_id": message_id})
+        except TdError as e:
+            log.info("No comments for %s/%s: %s", chat_id, message_id, e)
+            return
+        if self._history is None or self._history.chat_id != chat_id:
+            return
+        reply_info = info.get("reply_info") or {}
+        unread_after = (int(reply_info.get("last_read_inbox_message_id") or 0)
+                        if info.get("unread_message_count") else 0)
+        self.close()
+        self._thread_return = (chat_id, message_id)
+        self._start(int(info["chat_id"]), 0, int(info["message_thread_id"]), unread_after)
+        self._spawn(self._client.send({"@type": "openChat", "chat_id": int(info["chat_id"])}))
+
+    @Slot()
+    def closeComments(self) -> None:
+        """Back to the channel, at the post."""
+        back = self._thread_return
+        if back is None:
+            return
+        self.close()
+        self.open(back[0])
+        self.jumpTo(back[1])
 
     # --- forums -----------------------------------------------------------------------------
 
@@ -913,10 +967,15 @@ class MessageListModel(QAbstractListModel):
         if topic is not None:
             return topic.draft
         chat = self._chat()
-        return chat.draft if chat is not None and not self.topicsMode else None
+        return (chat.draft if chat is not None and not self.topicsMode and not self.threadMode
+                else None)
 
     def topic_obj(self) -> dict[str, Any] | None:
-        """MessageTopic of the open topic for requests (sending, drafts, typing)."""
+        """MessageTopic of the open topic (or comment thread) for requests: sending, drafts,
+        typing."""
+        history = self._history
+        if history is not None and history.thread_id:
+            return {"@type": "messageTopicThread", "message_thread_id": history.thread_id}
         return topic_obj(self.topicId)
 
     def _topic(self) -> Topic | None:
@@ -1432,6 +1491,12 @@ class MessageListModel(QAbstractListModel):
                 return bool(album) and row != album[0]
             case Role.LinkPreview:
                 return self._link_preview(message)
+            case Role.Comments:
+                info = (message.get("interaction_info") or {}).get("reply_info")
+                chat = self._chat()
+                if not isinstance(info, dict) or chat is None or chat.type != "channel":
+                    return -1
+                return int(info.get("reply_count") or 0)
             case Role.InlineKeyboard:
                 return inline_rows(message)
             case Role.Poll:

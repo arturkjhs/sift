@@ -53,6 +53,7 @@ Item {
     required property var linkPreview      // {url, site, title, text, image, ...} or {}
     required property var poll             // a poll, quiz or checklist, or {}
     required property var inlineKeyboard   // a bot's buttons: [[{text, kind, row, column}]]
+    required property int comments         // a channel post's comments; -1: none
 
     property bool isGroupChat: false
     property bool flashed: false   // just jumped to: briefly tinted
@@ -67,6 +68,7 @@ Item {
     signal selectToggled(var messageId, bool range)   // range: Shift-click
     signal reactRequested(var messageId, var button)   // the hover button: pick a reaction
     signal buttonPressed(var messageId, int row, int column)  // a bot's inline button
+    signal commentsRequested(var messageId)
 
     readonly property real sidePadding: 16
     readonly property real avatarSpace: isGroupChat && !isOutgoing ? 40 : 0
@@ -311,6 +313,8 @@ Item {
                                     + (root.timeBesideMedia ? timeRow.implicitWidth + 12 : 0) : 0,
                     body.visible ? body.implicitWidth : 0,
                     pollContent.visible ? 300 : 0,
+                    commentsBar.visible ? commentsRow.implicitWidth + timeRow.implicitWidth + 16
+                                        : 0,
                     linkCard.visible ? linkCard.naturalWidth : 0,
                     translationBlock.visible ? translationBlock.naturalWidth : 0,
                     transcriptText.visible ? transcriptText.implicitWidth
@@ -738,11 +742,46 @@ Item {
                         }
                     }
 
+                    // A channel post's comments (in its discussion group).
+                    Item {
+                        id: commentsBar
+                        objectName: "commentsBar"
+                        visible: root.comments >= 0
+                        width: parent.width
+                        height: visible ? 30 : 0
+                        Rectangle {
+                            width: parent.width
+                            height: 1
+                            color: Theme.separator
+                        }
+                        Row {
+                            id: commentsRow
+                            y: 9
+                            spacing: 6
+                            Icon {
+                                name: "reply"
+                                color: Theme.accent
+                                size: 16
+                            }
+                            Text {
+                                text: root.comments === 0 ? qsTr("Leave a comment")
+                                      : root.comments === 1 ? qsTr("1 comment")
+                                      : qsTr("%1 comments").arg(root.comments)
+                                color: Theme.accent
+                                font.pixelSize: Theme.fontBody
+                                font.weight: Font.DemiBold
+                            }
+                        }
+                        HoverHandler { cursorShape: Qt.PointingHandCursor }
+                        TapHandler { onTapped: root.commentsRequested(root.messageId) }
+                    }
+
                     Item {  // room for the time row when there's no text to tuck it into
                         visible: ((translationBlock.visible || linkCard.visible
-                                   || pollContent.visible) && !reactionFlow.visible)
+                                   || pollContent.visible) && !reactionFlow.visible
+                                  && !commentsBar.visible)
                                  || (!body.visible && !root.timeOnMedia && !root.timeBesideMedia
-                                     && !reactionFlow.visible)
+                                     && !reactionFlow.visible && !commentsBar.visible)
                         width: 1
                         height: mediaText.visible ? 0 : timeRow.height
                     }
