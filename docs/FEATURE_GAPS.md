@@ -143,9 +143,10 @@
 - [x] **Иконки в списке чатов:** pinned, muted, verified, ✓/✓✓ у своего последнего
   сообщения. Перевести оставшиеся глифы на набор `ui/icons.py`.
   → роли `verified`/`outStatus` (+ `pinned`/`muted`) в `ChatListModel`, иконки в `ChatDelegate.qml`; статусы в пузыре, плеер голосовых, карточка файла, просмотрщик, переключатель аккаунтов — на `ui/icons.py`.
-- [ ] **Автодополнение @упоминаний.** `searchChatMembers` при вводе `@`; для людей без
+- [x] **Автодополнение @упоминаний.** `searchChatMembers` при вводе `@`; для людей без
   username — сущность `textEntityTypeMentionName` (собирать entities вручную, `parseMarkdown`
   её не создаёт).
+  → `ComposerModel.findMentions/mentions`, попап `mentionPopup` в `Composer.qml`; без username — `[Имя](tg://user?id=N)` → `richtext.mention_names` после `parseMarkdown`.
 - [x] **Вставка картинки из буфера и подпись к файлам.** Cmd/Ctrl+V с изображением → окно
   отправки с превью и полем подписи; то же окно для «+» и drag-and-drop.
   → M7: `ComposerModel.staged`, `SendFilesDialog.qml`.

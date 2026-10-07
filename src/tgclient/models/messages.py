@@ -64,7 +64,7 @@ from ..store.reactions import (
     reaction_type,
     reactors_text,
 )
-from ..store.richtext import Palette, formatted_to_html, highlight_html
+from ..store.richtext import Palette, formatted_to_html, highlight_html, mention_names
 from ..store.users import UserStore
 from ..td.client import TdClient, TdError
 
@@ -833,8 +833,9 @@ class MessageListModel(QAbstractListModel):
                 chat_id = history.chat_id  # became (or stopped being) a forum: reopen
                 self.close()
                 self.open(chat_id)
-        elif kind == "topic" and payload == (history.chat_id, history.topic_id):
-            self.chatChanged.emit()
+        elif (kind == "topic" and payload == (history.chat_id, history.topic_id)) or (
+                kind == "topics" and payload == history.chat_id):
+            self.chatChanged.emit()  # the topic's name, its counters
             self.countersChanged.emit()
 
     @Slot()
@@ -1984,10 +1985,11 @@ class MessageListModel(QAbstractListModel):
         if not text:
             return formatted
         try:  # **bold**, __italic__, `code`, ```pre```, ~~strike~~, ||spoiler||, [text](url)
-            return await self._client.send({"@type": "parseMarkdown", "text": formatted})
+            parsed = await self._client.send({"@type": "parseMarkdown", "text": formatted})
         except TdError as e:
             log.debug("parseMarkdown failed, sending plain text: %s", e)
             return formatted
+        return mention_names(parsed)
 
     async def _request(self, request: dict[str, Any], what: str) -> None:
         try:

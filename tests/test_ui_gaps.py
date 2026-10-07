@@ -29,7 +29,11 @@ class Server(test_forums.Server):
                         {"@type": "updateSupergroup", "supergroup": {
                             "id": SUPERGROUP, "is_forum": True, "is_channel": False,
                             "member_count": 40}},
-                        {"@type": "updateUser", "user": {"id": 5, "first_name": "Olena"}},
+                        {"@type": "updateUser", "user": {"id": 5, "first_name": "Olena",
+                                                         "usernames": {
+                                                             "active_usernames": ["olena"]}}},
+                        {"@type": "updateUser", "user": {"id": 6, "first_name": "Petr",
+                                                         "last_name": "Novák"}},
                         {"@type": "updateUser", "user": {"id": 1, "first_name": "Me"}},
                         {"@type": "updateOption", "name": "my_id",
                          "value": {"@type": "optionValueInteger", "value": "1"}},
@@ -41,6 +45,10 @@ class Server(test_forums.Server):
             case "searchChatMessages":
                 return [{"@type": "foundChatMessages", "total_count": 0, "messages": [],
                          "next_from_message_id": 0, "@extra": extra}]
+            case "searchChatMembers":
+                return [{"@type": "chatMembers", "total_count": 2, "@extra": extra, "members": [
+                    {"member_id": {"@type": "messageSenderUser", "user_id": u}}
+                    for u in (5, 6)]}]
             case "close":
                 return [ok(req), auth_state("authorizationStateClosed")]
         return super().__call__(req)
@@ -174,6 +182,31 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(lock.locked)
         self.assertFalse(screen.isVisible())
         self.assertEqual(self.warnings, [], "QML warnings with the passcode")
+
+
+    async def test_mention_suggestions(self) -> None:
+        self.open_chat(FORUM)
+        self.session.messages.openTopic(7)
+        await wait_until(lambda: (self.pump(), self.session.messages.rowCount())[1] > 0)
+        field = self.item("composerInput")
+        field.setProperty("text", "thanks @")
+        field.setProperty("cursorPosition", 8)
+        await wait_until(lambda: (self.pump(), len(self.session.composer.mentions))[1] == 2)
+        await self.settle(0.1)
+        popup = self.item("mentionPopup")
+        self.assertTrue(popup.isVisible())
+        _screenshot(self.window, "mentions")
+        from PySide6.QtCore import QMetaObject, Q_ARG
+
+        composer = field
+        while composer is not None and composer.property("mentionMatch") is None:
+            composer = composer.parentItem()
+        QMetaObject.invokeMethod(composer, "insertMention",
+                                 Q_ARG("QVariant", self.session.composer.mentions[1]))
+        self.pump()
+        self.assertEqual(field.property("text"), "thanks [Petr Novák](tg://user?id=6) ")
+        self.assertFalse(popup.isVisible())
+        self.assertEqual(self.warnings, [], "QML warnings with mentions")
 
 
 if __name__ == "__main__":

@@ -430,6 +430,10 @@ src/tgclient/
   `getLinkPreview` через 0.6 с после смены ссылки; «×» — `sendOptions().noPreview` →
   `link_preview_options.is_disabled`. Текст из Composer уходит через `messages.sendMessage(text,
   replyTo, composerModel.sendOptions())`.
+- @упоминания: «@…» перед курсором в группе → `composerModel.findMentions` (`searchChatMembers`,
+  без себя, до 8) → попап над полем (↑/↓, Enter/Tab, клик). С username вставляется
+  `@username`, без него — `[Имя](tg://user?id=N)`: после `parseMarkdown` `richtext.mention_names`
+  превращает такую ссылку в `textEntityTypeMentionName` (человек получает упоминание).
 - Отправка: текст проходит через TDLib `parseMarkdown` (**bold**, __italic__, `code`, ```pre```,
   ~~strike~~, ||spoiler||, [text](url)), при ошибке уходит как plain text.
 

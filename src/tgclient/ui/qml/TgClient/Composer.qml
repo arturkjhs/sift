@@ -50,6 +50,29 @@ Rectangle {
         input.insert(input.cursorPosition, text)
     }
 
+    // "@…" right before the cursor: suggest members; picking one replaces the "@…".
+    readonly property var mentionMatch: {
+        const before = input.text.slice(0, input.cursorPosition)
+        return /(^|\s)@([\w.]*)$/.exec(before)
+    }
+    onMentionMatchChanged: {
+        if (mentionMatch && root.editingId === 0)
+            composerModel.findMentions(mentionMatch[2])
+        else
+            composerModel.stopMentions()
+        mentionList.currentIndex = 0
+    }
+
+    function insertMention(row) {
+        const match = root.mentionMatch
+        if (!match)
+            return
+        const start = input.cursorPosition - match[2].length - 1
+        input.remove(start, input.cursorPosition)
+        input.insert(start, row.insert)
+        composerModel.stopMentions()
+    }
+
     // A chat was opened, or its draft changed on another device. Not a user edit: don't save
     // it back or tell the chat we're typing.
     function loadDraft(text) {
@@ -501,7 +524,20 @@ Rectangle {
                     // Enter sends, Shift+Enter inserts a new line; Cmd/Ctrl+V with an image or
                     // copied files attaches them; Up in an empty input edits the last message.
                     Keys.onPressed: event => {
-                        if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
+                        if (mentionPopup.visible && (event.key === Qt.Key_Down
+                                                     || event.key === Qt.Key_Up)) {
+                            mentionList.currentIndex = (mentionList.currentIndex
+                                + (event.key === Qt.Key_Down ? 1 : -1) + mentionList.count)
+                                % mentionList.count
+                            event.accepted = true
+                        } else if (mentionPopup.visible && (event.key === Qt.Key_Return
+                                       || event.key === Qt.Key_Enter || event.key === Qt.Key_Tab)) {
+                            root.insertMention(composerModel.mentions[mentionList.currentIndex])
+                            event.accepted = true
+                        } else if (mentionPopup.visible && event.key === Qt.Key_Escape) {
+                            composerModel.stopMentions()
+                            event.accepted = true
+                        } else if ((event.key === Qt.Key_Return || event.key === Qt.Key_Enter)
                                 && !(event.modifiers & Qt.ShiftModifier)) {
                             root.send()
                             event.accepted = true
@@ -601,5 +637,73 @@ Rectangle {
     SendFilesDialog {
         replyToId: root.replyToId
         onSent: root.sent()
+    }
+
+    // Members for the "@…" being typed, just above the input.
+    Rectangle {
+        id: mentionPopup
+        objectName: "mentionPopup"
+        visible: composerModel.mentions.length > 0 && root.mentionMatch !== null
+        x: 52
+        y: -height - 6
+        z: 10
+        width: Math.min(320, root.width - 64)
+        height: Math.min(mentionList.contentHeight, 5 * 44) + 8
+        radius: 10
+        color: Theme.popup
+        border.width: 1
+        border.color: Theme.popupBorder
+
+        ListView {
+            id: mentionList
+            anchors.fill: parent
+            anchors.margins: 4
+            clip: true
+            model: composerModel.mentions
+            currentIndex: 0
+            boundsBehavior: Flickable.StopAtBounds
+            delegate: Rectangle {
+                id: mentionRow
+                required property var modelData
+                required property int index
+                width: ListView.view.width
+                height: 44
+                radius: 6
+                color: index === mentionList.currentIndex || mentionHover.hovered ? Theme.hover
+                                                                                  : "transparent"
+                HoverHandler { id: mentionHover }
+                TapHandler { onTapped: root.insertMention(mentionRow.modelData) }
+                Avatar {
+                    x: 8
+                    anchors.verticalCenter: parent.verticalCenter
+                    size: 30
+                    avatarSource: mentionRow.modelData.avatar
+                    initials: mentionRow.modelData.initials
+                    colorIndex: mentionRow.modelData.colorIndex
+                }
+                Column {
+                    x: 48
+                    width: parent.width - 56
+                    anchors.verticalCenter: parent.verticalCenter
+                    Text {
+                        width: parent.width
+                        text: mentionRow.modelData.name
+                        textFormat: Text.PlainText
+                        elide: Text.ElideRight
+                        color: Theme.text
+                        font.pixelSize: Theme.fontBody
+                        font.weight: Font.DemiBold
+                    }
+                    Text {
+                        width: parent.width
+                        visible: text !== ""
+                        text: mentionRow.modelData.username ? "@" + mentionRow.modelData.username
+                                                            : ""
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontSmall
+                    }
+                }
+            }
+        }
     }
 }

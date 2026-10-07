@@ -176,3 +176,21 @@ def highlight_html(html_text: str, query: str, background: str) -> str:
             parts[index])
     return "".join(parts)
 
+
+_USER_LINK = re.compile(r"^tg://user\?id=(\d+)$")
+
+
+def mention_names(formatted: dict[str, Any]) -> dict[str, Any]:
+    """Links to tg://user?id=N (how the composer writes a mention of someone without a
+    username) become textEntityTypeMentionName, which notifies them."""
+    entities = []
+    for entity in formatted.get("entities") or []:
+        kind = entity.get("type") or {}
+        match = _USER_LINK.match(kind.get("url", "")) if kind.get(
+            "@type") == "textEntityTypeTextUrl" else None
+        if match:
+            entity = {**entity, "type": {"@type": "textEntityTypeMentionName",
+                                         "user_id": int(match.group(1))}}
+        entities.append(entity)
+    return {**formatted, "entities": entities}
+

@@ -40,6 +40,7 @@ _URL = re.compile(r"(?:https?://|www\.|t\.me/)\S+|\b[\w-]+\.(?:com|org|net|io|de
 class ComposerModel(QObject):
     stagedChanged = Signal()
     linkPreviewChanged = Signal()
+    mentionsChanged = Signal()
     remoteDraft = Signal(str, "QVariant")  # text, reply-to id: replace the input
 
     def __init__(
@@ -64,6 +65,9 @@ class ComposerModel(QObject):
         self._preview_task: asyncio.Task[Any] | None = None
         self._preview_url = ""
         self._preview_image = 0  # file id of the preview's picture, while it downloads
+        self._mentions: list[dict[str, Any]] = []
+        self._mention_query: str | None = None
+        self._mention_task: asyncio.Task[Any] | None = None
         chats.files.subscribe(self._on_file)
         self._tasks: set[asyncio.Task[Any]] = set()
         messages.chatChanged.connect(self._on_chat_changed)
@@ -130,6 +134,7 @@ class ComposerModel(QObject):
         self._synced = (self._text.strip(), self._reply_to)
         self.clearStaged()
         self._reset_preview()
+        self.stopMentions()
 
     def _on_chats(self, kind: str, payload: Any) -> None:
         if kind != "chat" or payload != self._chat_id or not self._chat_id or self._topic:
@@ -184,6 +189,80 @@ class ComposerModel(QObject):
         self._spawn(self._request({
             "@type": "sendChatAction", "chat_id": self._chat_id, "topic_id": self._topic,
             "business_connection_id": "", "action": {"@type": "chatActionTyping"}}))
+
+    # --- @mentions ---------------------------------------------------------------------------
+
+    @Property("QVariantList", notify=mentionsChanged)
+    def mentions(self) -> list[dict[str, Any]]:
+        """Members matching the "@…" being typed: {userId, name, username, insert, avatar,
+        initials, colorIndex}. `insert` is what replaces the "@…": "@username " or, without a
+        username, a markdown link that becomes a mention entity when sent."""
+        return list(self._mentions)
+
+    @Slot(str)
+    def findMentions(self, query: str) -> None:
+        """QML: the word at the cursor starts with "@" (query without it), or "" to stop."""
+        chat = self._chats.chats.get(self._chat_id)
+        if query == self._mention_query:
+            return
+        self._mention_query = query
+        if self._mention_task is not None:
+            self._mention_task.cancel()
+            self._mention_task = None
+        if query is None or chat is None or chat.type not in ("group", "supergroup"):
+            self._set_mentions([])
+            return
+        self._mention_task = self._spawn(self._search_members(self._chat_id, query))
+
+    @Slot()
+    def stopMentions(self) -> None:
+        self._mention_query = None
+        if self._mention_task is not None:
+            self._mention_task.cancel()
+        self._set_mentions([])
+
+    async def _search_members(self, chat_id: int, query: str) -> None:
+        await asyncio.sleep(0.15)
+        try:
+            found = await self._client.send({"@type": "searchChatMembers", "chat_id": chat_id,
+                                             "query": query, "limit": 20, "filter": None})
+        except TdError as e:
+            log.info("searchChatMembers failed: %s", e)
+            return
+        if chat_id != self._chat_id or query != self._mention_query:
+            return
+        users = self._messages._users  # the same UserStore
+        rows = []
+        for member in found.get("members") or []:
+            sender = member.get("member_id") or {}
+            user = users.users.get(sender.get("user_id", 0))
+            if user is None or user.id == users.my_id:
+                continue
+            username = user.usernames[0] if user.usernames else ""
+            name = user.full_name or username
+            rows.append({
+                "userId": user.id, "name": name, "username": username,
+                "insert": f"@{username} " if username else f"[{_escape_md(name)}]"
+                                                            f"(tg://user?id={user.id}) ",
+                "avatar": self._avatar(user.photo_file_id),
+                "initials": "".join(w[0] for w in name.split()[:2]).upper() or "?",
+                "colorIndex": user.id % 7,
+            })
+        self._set_mentions(rows[:8])
+
+    def _avatar(self, file_id: int | None) -> str:
+        files = self._chats.files
+        if file_id is None:
+            return ""
+        if files.path(file_id):
+            return files.url("avatar", file_id)
+        files.download(file_id)
+        return ""
+
+    def _set_mentions(self, rows: list[dict[str, Any]]) -> None:
+        if rows != self._mentions:
+            self._mentions = rows
+            self.mentionsChanged.emit()
 
     # --- link preview -----------------------------------------------------------------------
 
@@ -363,6 +442,10 @@ class ComposerModel(QObject):
         self._tasks.discard(task)
         if not task.cancelled() and task.exception() is not None:
             log.error("Composer task failed", exc_info=task.exception())
+
+
+def _escape_md(text: str) -> str:
+    return re.sub(r"([\[\]()_*~`|\\])", r"\\\1", text)
 
 
 def _clean_old_pastes(paste_dir: Path | None) -> None:
