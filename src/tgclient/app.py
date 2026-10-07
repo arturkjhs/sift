@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import dataclasses
 import logging
 import sys
@@ -49,17 +50,20 @@ from .ui.ai_controller import AiController
 from .ui.animation import register_qml_types
 from .ui.auth_controller import AuthController
 from .ui.icons import IconProvider
+from .ui.lock import LockController
 from .ui.images import TdImageProvider
 from .ui.notifications import Backend, NotificationController, default_backend
 from .ui.recorder import VoiceRecorder
 from .ui.shell import ShellController
 from .ui.updates import UpdateController
 from .ui.voice_player import VoicePlayer
+from .vault import SealedFile, Vault, database_exists, system_keyring
 
 log = logging.getLogger(__name__)
 
 QML_IMPORT_DIR = Path(__file__).resolve().parent / "ui" / "qml"
 APP_ICON = Path(__file__).resolve().parent / "ui" / "app-icon.svg"
+SEAL_INTERVAL = 120  # seconds between writes of sealed AI data (if it changed)
 
 
 class Session:
@@ -78,11 +82,26 @@ class Session:
         account_key: str = FIRST,
         prefs: Prefs | None = None,
         shared_notifications: bool = False,
+        vault: Vault | None = None,
     ) -> None:
         """`hub`, `prefs` and the notification backend are shared between accounts
         (AccountManager); without them the session owns its own."""
         self.settings = settings
         self.account_key = account_key
+        # Encryption: the TDLib database key, and (with a passcode) our databases sealed.
+        self.vault = vault
+        data_key = vault.data_key(account_key) if vault is not None else None
+        self._sealed = [SealedFile(settings.ai_db_path, data_key),
+                        SealedFile(settings.search_db_path, data_key)]
+        if ai_store is None:
+            ai_store = (AiStore(":memory:", self._sealed[0].load()) if data_key
+                        else AiStore(settings.ai_db_path))
+        if search_index is None:
+            search_index = (SearchIndex(":memory:", self._sealed[1].load()) if data_key
+                            else SearchIndex(settings.search_db_path))
+        self._stores = (ai_store, search_index)
+        self._seal_task: asyncio.Task[None] | None = None
+        self._rekey: bytes | None = None
         self._own_hub = hub is None
         if hub is None:
             if lib is None:
@@ -114,8 +133,7 @@ class Session:
         if router is None and settings.openrouter_api_key:
             router = OpenRouter(settings.openrouter_api_key)
         self.ai_service = AiService(
-            self.client, self.chats, self.users,
-            ai_store or AiStore(settings.ai_db_path), router,
+            self.client, self.chats, self.users, ai_store, router,
             self.prefs.get("summary_model") or settings.summary_model,
             self.prefs.get("transcription_model") or settings.transcription_model,
             key_hint=mask_key(settings.openrouter_api_key) if router else "",
@@ -150,7 +168,7 @@ class Session:
             embedder = FastEmbedder(settings.embedding_model, settings.models_dir)
         self.search_service = SearchService(
             self.client, self.chats, self.users,
-            search_index or SearchIndex(settings.search_db_path), embedder, self.ai_service,
+            search_index, embedder, self.ai_service,
         )
         self.search = SearchModel(self.search_service, self.chats)
         self.ai_service.searcher = lambda query, chat_id: self.search_service.search(
@@ -164,7 +182,54 @@ class Session:
         topic = self.forums.get(chat_id, topic_id)
         return (topic.name, topic.last_read_inbox_message_id) if topic else ("", 0)
 
+    def _prepare_database_key(self) -> None:
+        """The key TDLib opens its database with. A database from before encryption opens
+        with the empty key and gets the new one once logged in (_encrypt_old_database)."""
+        vault = self.vault
+        if vault is None:
+            return
+        key = vault.database_key(self.account_key)
+        if key is None:
+            key = vault.new_key()
+            if database_exists(self.settings.database_dir):
+                self._rekey, key = key, b""
+            else:
+                vault.store_database_key(self.account_key, key)
+        self.auth_flow.params = dataclasses.replace(self.auth_flow.params,
+                                                    database_encryption_key=key)
+
+    async def _encrypt_old_database(self) -> None:
+        if self._rekey is None or self.vault is None:
+            return
+        key, self._rekey = self._rekey, None
+        try:
+            await self.client.send({"@type": "setDatabaseEncryptionKey",
+                                    "new_encryption_key": base64.b64encode(key).decode()})
+        except TdError as e:
+            log.error("Encrypting the local database failed: %s", e)
+            return
+        self.vault.store_database_key(self.account_key, key)
+        log.info("Local database of %s is encrypted now", self.account_key)
+
+    async def _seal_periodically(self) -> None:
+        stores = self._stores
+        seen = [store.changes for store in stores]
+        while True:
+            await asyncio.sleep(SEAL_INTERVAL)
+            for index, store in enumerate(stores):
+                if store.changes != seen[index]:
+                    seen[index] = store.changes
+                    data = await asyncio.to_thread(store.snapshot)
+                    await asyncio.to_thread(self._sealed[index].save, data)
+
+    def reseal(self, key: bytes | None) -> None:
+        """The passcode was set or removed: from now on our databases are written sealed (or
+        plain), at the latest when the app closes."""
+        for sealed in self._sealed:
+            sealed.key = key
+
     async def start(self) -> None:
+        self._prepare_database_key()
         try:
             await self.client.send({"@type": "getOption", "name": "version"})
         except TdError:
@@ -174,6 +239,9 @@ class Session:
         except AuthError as e:
             self.auth.set_failed(str(e))
             return
+        await self._encrypt_old_database()
+        if self._sealed[0].key is not None:
+            self._seal_task = asyncio.ensure_future(self._seal_periodically())
         self.auth.set_ready()
         self.chat_list.setList(MAIN)
         self.search_service.start()
@@ -202,7 +270,15 @@ class Session:
     async def close(self) -> None:
         self.voice.stop()
         self.notifications.close()
+        if self._seal_task is not None:
+            self._seal_task.cancel()
         await self.composer.close()
+        for sealed, store in zip(self._sealed, self._stores, strict=True):
+            if sealed.key is not None or sealed.sealed.exists():
+                try:
+                    sealed.save(store.snapshot(), final=True)
+                except Exception:  # noqa: BLE001 - never lose the close over it
+                    log.exception("Saving %s failed", sealed.path.name)
         await self.search_service.close()
         await self.ai_service.close()
         await self.client.close()
@@ -210,7 +286,12 @@ class Session:
             self.hub.stop()
 
     def wipe_local(self) -> None:
-        """After logging out: our own databases of this account (AI results, search index)."""
+        """After logging out: our own databases of this account (AI results, search index),
+        sealed or not, and the database key."""
+        if self.vault is not None:
+            self.vault.forget(self.account_key)
+        for sealed in self._sealed:
+            sealed.key = None  # nothing is saved on close
         for path in (self.settings.ai_db_path, self.settings.search_db_path):
             for candidate in path.parent.glob(path.name + "*"):  # -wal, -shm
                 try:
@@ -253,6 +334,7 @@ def create_engine(
     on_warnings: Callable[[list[str]], None] | None = None,
     accounts: AccountManager | None = None,
     updates: UpdateController | None = None,
+    lock: LockController | None = None,
 ) -> QQmlApplicationEngine:
     """`session` is the one shown first; `accounts` (default: just this session) has all."""
     register_qml_types()
@@ -275,10 +357,14 @@ def create_engine(
     # Context properties don't own their objects: keep Python refs alive as long as the engine.
     updates = updates or UpdateController(None, session.prefs,
                                           build_info().get("VERSION", "dev"))
+    lock = lock or LockController(None)
+    for each in accounts.sessions.values():
+        each.notifications.notifier.private = lock.is_private
     engine._tgclient_refs = (  # type: ignore[attr-defined]
-        shell, images, icons, qr, accounts, updates)
+        shell, images, icons, qr, accounts, updates, lock)
     context = engine.rootContext()
     context.setContextProperty("shell", shell)
+    context.setContextProperty("lock", lock)
     context.setContextProperty("accounts", accounts)
     context.setContextProperty("updates", updates)
     accounts.set_binder(lambda active: bind_session(engine, images, active),
@@ -337,8 +423,17 @@ async def amain(app: QGuiApplication) -> int:
     quit_event = asyncio.Event()
     app.aboutToQuit.connect(quit_event.set)
 
-    hub = TdHub(native_lib(settings))
     prefs = Prefs(settings.data_dir / "prefs.json")
+    shell = ShellController(quit_event, prefs)
+    vault = Vault(settings.data_dir, system_keyring())
+    accounts: AccountManager | None = None
+    lock = LockController(vault, prefs,
+                          sessions=lambda: list(accounts.sessions.values()) if accounts else [])
+    app.installEventFilter(lock)
+    if vault.locked and not await unlock_at_launch(lock, shell, quit_event):
+        return 0
+
+    hub = TdHub(native_lib(settings))
     backend = default_backend()
     registry = AccountRegistry(settings.data_dir)
 
@@ -346,20 +441,21 @@ async def amain(app: QGuiApplication) -> int:
         account_settings = dataclasses.replace(settings, account=account.folder)
         account_settings.database_dir.mkdir(parents=True, exist_ok=True)
         account_settings.files_dir.mkdir(parents=True, exist_ok=True)
-        return Session(account_settings, hub=hub, account_key=account.key, prefs=prefs,
-                       notification_backend=backend, shared_notifications=True)
+        session = Session(account_settings, hub=hub, account_key=account.key, prefs=prefs,
+                          notification_backend=backend, shared_notifications=True, vault=vault)
+        session.notifications.notifier.private = lock.is_private
+        return session
 
     accounts = AccountManager(registry, make_session)
     backend.on_activated = accounts.handle_notification_click
     accounts.on_badge = lambda count: app.setBadgeNumber(count)
     accounts.start()
-    shell = ShellController(quit_event, prefs)
     app.applicationStateChanged.connect(
         lambda state: accounts.set_app_active(state == Qt.ApplicationState.ApplicationActive))
     updates = UpdateController(update_checker(), prefs, build_info().get("VERSION", "dev"))
     updates.quitRequested.connect(shell.requestQuit)
     updates.start()
-    engine = create_engine(accounts.active, shell, accounts=accounts, updates=updates)
+    engine = create_engine(accounts.active, shell, accounts=accounts, updates=updates, lock=lock)
     if not engine.rootObjects():
         log.error("Failed to load QML")
         await accounts.close()
@@ -376,6 +472,26 @@ async def amain(app: QGuiApplication) -> int:
         backend.close()
         hub.stop()
     return 0
+
+
+async def unlock_at_launch(lock: LockController, shell: ShellController,
+                           quit_event: asyncio.Event) -> bool:
+    """A passcode is set: only the lock screen, until it decrypts the database keys.
+    False: the window was closed instead."""
+    engine = QQmlApplicationEngine()
+    engine.addImportPath(str(QML_IMPORT_DIR))
+    engine._tgclient_refs = (lock, shell)  # type: ignore[attr-defined]
+    engine.rootContext().setContextProperty("lock", lock)
+    engine.rootContext().setContextProperty("shell", shell)
+    engine.loadFromModule("TgClient", "LockWindow")
+    unlocked = asyncio.Event()
+    lock.unlocked.connect(unlocked.set)
+    waits = {asyncio.ensure_future(unlocked.wait()), asyncio.ensure_future(quit_event.wait())}
+    _, pending = await asyncio.wait(waits, return_when=asyncio.FIRST_COMPLETED)
+    for task in pending:
+        task.cancel()
+    dispose_engine(engine)
+    return unlocked.is_set()
 
 
 def install_asyncgen_hooks(loop: asyncio.AbstractEventLoop) -> None:

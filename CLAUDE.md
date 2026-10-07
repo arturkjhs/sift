@@ -73,6 +73,8 @@ src/tgclient/
              `data_dir/prefs.json`
   devbundle.py  macOS `uv run`: перезапуск из своего dev-.app (иконка, bundle id)
   accounts.py   реестр аккаунтов `data_dir/accounts.json` (Qt-free)
+  vault.py      ключи шифрования: база TDLib (keyring/файл), пароль (scrypt + AES-GCM),
+                запечатанные AI-данные (`SealedFile`)
   app.py     GUI: Session (TDLib-клиент + сторы + модели), QML engine, qasync loop
   cli.py     консольная обвязка для отладки слоя td/
 ```
@@ -350,6 +352,23 @@ src/tgclient/
 - Фото скачиваются лениво: роль `avatarSource` при первом запросе вызывает `request_photo()`,
   то есть грузится только то, что видно в списке.
 
+## Шифрование и пароль
+
+- База TDLib каждого аккаунта шифруется своим случайным 32-байтным ключом (`Vault`,
+  `data_dir/vault.json`): без пароля ключ в системном keyring (Keychain / Secret Service;
+  нет keyring или `TGC_KEY_STORE=file` — в `vault.json`, 0600). Старая база (есть `td.binlog`,
+  ключа нет) открывается пустым ключом, после входа — `setDatabaseEncryptionKey` и только
+  потом ключ сохраняется (`Session._encrypt_old_database`).
+- Пароль (Settings → Passcode, `LockController` = `lock` в QML): ключи хранятся только
+  обёрнутыми (scrypt → AES-GCM, `derive(master, account)`) и уходят из keyring; при запуске —
+  сначала отдельное окно `LockWindow.qml` (`unlock_at_launch`), сессии создаются после
+  разблокировки. С паролем `ai.sqlite3`/`search.sqlite3` живут в памяти (`initial`/`snapshot`)
+  и пишутся зашифрованными `*.sealed` раз в 2 мин (если менялись) и при выходе; ключ —
+  `derive(db_key, "ai-data")`. Снятие/установка пароля на ходу переключает `SealedFile.key`,
+  окончательно файлы переписываются при закрытии. Блокировка (Cmd+L, авто через N минут без
+  ввода — фильтр событий на приложении): `LockScreen` поверх окна, TDLib работает,
+  уведомления без текста (`Notifier.private`). Выход из аккаунта удаляет его ключ.
+
 ## Юридические ограничения
 
 - tdesktop под GPLv3: читать код можно, копировать код, иконки, звуки, `.style`-файлы нельзя
@@ -566,7 +585,6 @@ uv run python -m unittest discover -s tests
 
 ## TODO / открытые вопросы
 
-- `database_encryption_key` сейчас пустой → генерировать и хранить в системном keyring (`keyring`).
 - Упаковка: ключ OpenRouter хранится в конфиг-`.env` (0600), не в Keychain — ad-hoc подпись
   меняется с каждой сборкой и Keychain спрашивал бы доступ заново; при Developer ID —
   перейти на keyring. Нотаризация при активном

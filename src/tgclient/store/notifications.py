@@ -59,6 +59,7 @@ class Notifier:
         self.suppress = suppress  # e.g. the chat is open in the focused window
         self.enabled = True
         self.show_preview = True
+        self.private: Callable[[], bool] = lambda: False  # e.g. the app is locked: no text
         # Smart notifications: chats where a model decides whether a message deserves one.
         self.smart: Callable[[int], bool] = lambda chat_id: False
         self.relevance: Callable[[int, int], Awaitable[bool]] | None = None
@@ -134,7 +135,7 @@ class Notifier:
         chat_id = message.get("chat_id") or chat_id
         chat = self._chats.chats.get(chat_id)
         title = chat.title if chat else ""
-        preview = (self.show_preview and kind.get("show_preview", True)
+        preview = (self.show_preview and not self.private() and kind.get("show_preview", True)
                    and not (chat and chat.type == "secret"))
         subtitle = ""
         if chat and chat.type in ("group", "supergroup"):

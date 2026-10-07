@@ -18,3 +18,7 @@ jeepney==0.9.0
 av==15.1.0
 rlottie-python==1.3.8
 segno==1.6.6
+# Local database encryption: the key in the system keyring (Keychain / Secret Service), the
+# passcode-wrapped keys and sealed AI data with AES-GCM. cryptography wheels are abi3 macOS 10.9+.
+keyring==25.7.0
+cryptography==50.0.2

@@ -30,3 +30,5 @@ MediaViewer 1.0 MediaViewer.qml
 ReactionPicker 1.0 ReactionPicker.qml
 JumpButton 1.0 JumpButton.qml
 TopicList 1.0 TopicList.qml
+LockScreen 1.0 LockScreen.qml
+LockWindow 1.0 LockWindow.qml

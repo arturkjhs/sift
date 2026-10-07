@@ -47,7 +47,7 @@ class TdlibParams:
     api_hash: str
     database_dir: Path
     files_dir: Path
-    database_encryption_key: bytes = b""  # TODO: generate and keep in system keyring
+    database_encryption_key: bytes = b""  # from the Vault (Session), b"" before encryption
     use_test_dc: bool = False
     system_language_code: str = "en"
     device_model: str = field(default_factory=lambda: f"{platform.system()} {platform.machine()}")
@@ -80,7 +80,7 @@ class AuthFlow:
     def __init__(self, client: TdClient, ui: AuthUI, params: TdlibParams) -> None:
         self._client = client
         self._ui = ui
-        self._params = params
+        self.params = params  # may be replaced before run() (the database key)
         self._states: asyncio.Queue[dict[str, Any]] = asyncio.Queue()
         self._unsubscribe = client.on("updateAuthorizationState", self._on_state)
 
@@ -107,7 +107,10 @@ class AuthFlow:
         ui = self._ui
         match state["@type"]:
             case "authorizationStateWaitTdlibParameters":
-                await self._client.send(self._params.to_request())
+                try:
+                    await self._client.send(self.params.to_request())
+                except TdError as e:
+                    raise AuthError(f"Can't open the local database: {e.message}") from e
 
             case "authorizationStateWaitPhoneNumber":
                 await self._prompt_and_send(

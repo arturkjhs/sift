@@ -129,5 +129,52 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.warnings, [], "QML warnings in the invite dialog")
 
 
+    async def test_passcode_settings_and_lock_screen(self) -> None:
+        from PySide6.QtCore import QMetaObject, QObject
+
+        from tgclient.ui.lock import LockController
+        from tgclient.vault import Vault
+
+        lock = self.engine._tgclient_refs[6]
+        self.assertIsInstance(lock, LockController)
+        # the test engine has no vault: give it one, as the app does
+        lock._vault = Vault(Path(tempfile.mkdtemp()), None)
+        lock.changed.emit()
+        settings = self.window.findChild(QObject, "settingsDialog")
+        QMetaObject.invokeMethod(settings, "open")
+        await self.settle()
+        form = settings.findChild(QObject, "passcodeForm")
+        form.setProperty("editing", True)
+        flick = settings.property("contentItem")
+        flick.setProperty("contentY", max(0.0, form.mapToItem(
+            flick.property("contentItem"), 0, 0).y() - 120))
+        await self.settle(0.1)
+        _screenshot(self.window, "passcode-settings")
+        self.assertEqual(lock.setPasscode("2468", ""), "")
+        form.setProperty("editing", False)
+        await self.settle(0.1)
+        _screenshot(self.window, "passcode-set")
+        QMetaObject.invokeMethod(settings, "close")
+        await self.settle(0.15)
+
+        lock.lockNow()
+        await self.settle()
+        screen = self.item("lockScreen")
+        self.assertTrue(screen.isVisible())
+        _screenshot(self.window, "locked")
+        field = self.item("passcodeField")
+        field.setProperty("text", "0000")
+        QMetaObject.invokeMethod(screen, "tryUnlock")
+        await self.settle(0.1)
+        self.assertTrue(lock.locked)
+        self.assertEqual(self.item("lockError").property("text"), "Wrong passcode")
+        field.setProperty("text", "2468")
+        QMetaObject.invokeMethod(screen, "tryUnlock")
+        await self.settle(0.1)
+        self.assertFalse(lock.locked)
+        self.assertFalse(screen.isVisible())
+        self.assertEqual(self.warnings, [], "QML warnings with the passcode")
+
+
 if __name__ == "__main__":
     unittest.main()

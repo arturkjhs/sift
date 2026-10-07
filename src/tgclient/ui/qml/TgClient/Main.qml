@@ -52,4 +52,18 @@ ApplicationWindow {
     }
 
     MediaViewer {}
+
+    // The passcode lock: over everything, popups included.
+    LockScreen {
+        parent: Overlay.overlay
+        anchors.fill: parent
+        z: 1000
+        visible: lock.locked
+    }
+
+    Shortcut {
+        sequence: "Ctrl+L"
+        enabled: lock.hasPasscode && !lock.locked
+        onActivated: lock.lockNow()
+    }
 }

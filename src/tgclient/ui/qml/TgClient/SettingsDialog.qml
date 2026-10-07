@@ -156,6 +156,152 @@ Popup {
                 onClicked: notifications.sendTest()
             }
 
+            SectionTitle {
+                objectName: "securitySection"
+                visible: lock.available
+                text: qsTr("Passcode")
+            }
+            Paragraph {
+                visible: lock.available
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                text: lock.hasPasscode
+                      ? qsTr("The local database, AI results and the search index are encrypted "
+                             + "with keys only your passcode opens. Without it the app shows "
+                             + "nothing, and notifications have no text while locked.")
+                      : qsTr("The local database is encrypted with a key kept in the system "
+                             + "keychain. A passcode also locks the app and encrypts AI results "
+                             + "and the search index; forgetting it means logging in again.")
+            }
+            ColumnLayout {
+                id: passcodeForm
+                objectName: "passcodeForm"
+                property bool editing: false
+                property string error: ""
+                visible: lock.available
+                Layout.fillWidth: true
+                spacing: 8
+
+                function reset() {
+                    editing = false
+                    error = ""
+                    currentField.text = ""
+                    newField.text = ""
+                    repeatField.text = ""
+                }
+
+                component SecretField: TextField {
+                    Layout.fillWidth: true
+                    echoMode: TextInput.Password
+                    color: Theme.text
+                    placeholderTextColor: Theme.textMuted
+                    font.pixelSize: Theme.fontBody
+                    padding: 8
+                    background: Rectangle {
+                        radius: 8
+                        color: Theme.field
+                        border.width: 1
+                        border.color: parent.activeFocus ? Theme.accent : Theme.fieldBorder
+                    }
+                }
+
+                SecretField {
+                    id: currentField
+                    objectName: "currentPasscode"
+                    visible: lock.hasPasscode && passcodeForm.editing
+                    placeholderText: qsTr("Current passcode")
+                }
+                SecretField {
+                    id: newField
+                    objectName: "newPasscode"
+                    visible: passcodeForm.editing
+                    placeholderText: qsTr("New passcode")
+                }
+                SecretField {
+                    id: repeatField
+                    objectName: "repeatPasscode"
+                    visible: passcodeForm.editing
+                    placeholderText: qsTr("Repeat the new passcode")
+                }
+                Text {
+                    visible: passcodeForm.error !== ""
+                    text: passcodeForm.error
+                    color: Theme.danger
+                    font.pixelSize: Theme.fontSmall
+                }
+                RowLayout {
+                    spacing: 6
+                    PillButton {
+                        visible: !passcodeForm.editing
+                        text: lock.hasPasscode ? qsTr("Change passcode") : qsTr("Set a passcode")
+                        iconName: "pin"
+                        onClicked: passcodeForm.editing = true
+                    }
+                    PillButton {
+                        objectName: "savePasscode"
+                        visible: passcodeForm.editing
+                        filled: true
+                        text: qsTr("Save")
+                        onClicked: {
+                            if (newField.text !== repeatField.text) {
+                                passcodeForm.error = qsTr("The passcodes don't match")
+                                return
+                            }
+                            const error = lock.setPasscode(newField.text, currentField.text)
+                            if (error === "")
+                                passcodeForm.reset()
+                            else
+                                passcodeForm.error = qsTr(error)
+                        }
+                    }
+                    PillButton {
+                        visible: passcodeForm.editing && lock.hasPasscode
+                        text: qsTr("Turn off")
+                        danger: true
+                        onClicked: {
+                            const error = lock.removePasscode(currentField.text)
+                            if (error === "")
+                                passcodeForm.reset()
+                            else
+                                passcodeForm.error = qsTr(error)
+                        }
+                    }
+                    PillButton {
+                        visible: passcodeForm.editing
+                        text: qsTr("Cancel")
+                        onClicked: passcodeForm.reset()
+                    }
+                    PillButton {
+                        visible: !passcodeForm.editing && lock.hasPasscode
+                        text: Qt.platform.os === "osx" ? qsTr("Lock now (\u2318L)")
+                                                       : qsTr("Lock now (Ctrl+L)")
+                        onClicked: {
+                            root.close()
+                            lock.lockNow()
+                        }
+                    }
+                }
+                RowLayout {
+                    visible: lock.hasPasscode && !passcodeForm.editing
+                    spacing: 6
+                    Text {
+                        text: qsTr("Lock after")
+                        color: Theme.text
+                        font.pixelSize: Theme.fontBody
+                    }
+                    Repeater {
+                        model: lock.autoLockChoices
+                        PillButton {
+                            required property int modelData
+                            text: modelData === 0 ? qsTr("Never")
+                                  : modelData === 60 ? qsTr("1 h") : qsTr("%1 min").arg(modelData)
+                            filled: lock.autoLockMinutes === modelData
+                            onClicked: lock.setAutoLock(modelData)
+                        }
+                    }
+                }
+            }
+
             SectionTitle { text: qsTr("Updates") }
             RowLayout {
                 objectName: "updatesRow"

@@ -115,10 +115,13 @@ def month_start(now: float | None = None) -> int:
 class AiStore:
     CACHE_DAYS = 14
 
-    def __init__(self, path: Path | str) -> None:
+    def __init__(self, path: Path | str, initial: bytes | None = None) -> None:
+        """`initial`: a database image to start from (path ":memory:"), e.g. decrypted."""
         if isinstance(path, Path):
             path.parent.mkdir(parents=True, exist_ok=True)
         self._db = sqlite3.connect(str(path), check_same_thread=False)
+        if initial:
+            self._db.deserialize(initial)
         self._lock = threading.Lock()
         with self._lock, self._db:
             self._db.execute("PRAGMA journal_mode=WAL")
@@ -218,6 +221,15 @@ class AiStore:
             for table in ("transcripts", "translations", "summaries", "person_summaries",
                           "results", "chat_flags"):
                 self._db.execute(f"DELETE FROM {table} WHERE chat_id = ?", (chat_id,))
+
+    def snapshot(self) -> bytes:
+        """The whole database as bytes (to store it encrypted)."""
+        with self._lock:
+            return self._db.serialize()
+
+    @property
+    def changes(self) -> int:
+        return self._db.total_changes
 
     def close(self) -> None:
         with self._lock:
