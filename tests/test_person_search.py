@@ -141,5 +141,98 @@ class PersonMessagesModelTest(PersonCase):
         self.assertTrue(model.onBehalf)
 
 
+
+class FromFilterTest(PersonCase):
+    def test_split_from(self) -> None:
+        from tgclient.services.person_search import split_from
+
+        self.assertEqual(split_from("from:@olena money"), ("money", "olena"))
+        self.assertEqual(split_from("money from:Petr"), ("money", "Petr"))
+        self.assertEqual(split_from("money"), ("money", ""))
+        self.assertEqual(split_from("info:x"), ("info:x", ""))
+
+    async def test_chat_search_with_sender(self) -> None:
+        from tgclient.models.messages import MessageListModel
+
+        for event in ({"@type": "updateUser", "user": {
+                "id": 5, "first_name": "Olena", "usernames": {"active_usernames": ["olena"]}}},
+                {"@type": "updateUser", "user": {"id": 6, "first_name": "Petr"}}):
+            self.lib.push(event)
+        await wait_until(lambda: 6 in self.users.users)
+        model = MessageListModel(self.client, self.chats, self.users, forums=None)
+        model.open(GROUP)
+        rewritten: list[str] = []
+        jumps: list[int] = []
+        model.chatSearchQueryRewritten.connect(rewritten.append)
+        model.chatSearchJump.connect(jumps.append)
+        model.searchInChat("from:@olena money")
+        await wait_until(lambda: model.chatSearchSender == "user:5" and bool(jumps))
+        self.assertEqual(rewritten, ["money"])
+        self.assertEqual((model.chatSearchQuery, model.chatSearchSenderName), ("money", "Olena"))
+        self.assertEqual(jumps, [91])
+        sent = [r for r in self.server.searches if r.get("sender_id")][-1]
+        self.assertEqual((sent["query"], sent["sender_id"]["user_id"]), ("money", 5))
+
+        model.searchInChat("")  # the chip alone: all of their messages
+        await wait_until(lambda: model.chatSearchCount == 50)
+        model.setChatSearchSender("user:6", "Petr")
+        await wait_until(lambda: self.server.searches[-1]["sender_id"]["user_id"] == 6)
+        model.endChatSearch()
+        self.assertEqual((model.chatSearchSender, model.chatSearchCount), ("", 0))
+
+    async def test_sender_picker(self) -> None:
+        from tgclient.models.sender_picker import SenderPicker
+
+        for event in ({"@type": "updateUser", "user": {
+                "id": 5, "first_name": "Olena", "usernames": {"active_usernames": ["olena"]}}},
+                {"@type": "updateUser", "user": {"id": 6, "first_name": "Petr"}},
+                {"@type": "updateOption", "name": "my_id",
+                 "value": {"@type": "optionValueInteger", "value": "1"}},
+                {"@type": "updateUser", "user": {"id": 1, "first_name": "Me"}},
+                new_chat(5, "Olena", 3)):
+            self.lib.push(event)
+        await wait_until(lambda: 5 in self.chats.chats and self.users.my_id == 1)
+        picker = SenderPicker(self.client, self.chats, self.users)
+        picker.find("", 5)  # a private chat: the other person and me
+        await wait_until(lambda: [r["key"] for r in picker.rows] == ["user:5", "user:1"])
+        picker.find("ole", 0)  # anyone known, by name or username
+        await wait_until(lambda: [r["key"] for r in picker.rows] == ["user:5"])
+        self.assertEqual(picker.rows[0]["username"], "olena")
+
+
+class GlobalFromTest(PersonCase):
+    async def test_global_search_from(self) -> None:
+        from tgclient.models.search import SearchModel
+        from tgclient.services.search import SearchService
+        from tgclient.services.search_index import SearchIndex
+
+        self.lib.push({"@type": "updateUser", "user": {
+            "id": 5, "first_name": "Olena", "usernames": {"active_usernames": ["olena"]}}})
+        await wait_until(lambda: 5 in self.users.users)
+        service = SearchService(self.client, self.chats, self.users, SearchIndex(":memory:"),
+                                None, None)
+        captured: list[tuple[str, int, str]] = []
+
+        async def fake_search(query: str, chat_id: int = 0, sender: str = "",
+                              limit: int = 40) -> list[Any]:
+            captured.append((query, chat_id, sender))
+            return []
+
+        service.search = fake_search  # type: ignore[method-assign]
+        model = SearchModel(service, self.chats, client=self.client, users=self.users)
+        rewritten: list[str] = []
+        model.queryRewritten.connect(rewritten.append)
+        model.setProperty("query", "from:@olena money")
+        await wait_until(lambda: model.sender == "user:5")
+        self.assertEqual((model.query, rewritten), ("money", ["money"]))
+        model._run()  # the debounce timer (no Qt loop in this test)
+        await wait_until(lambda: bool(captured))
+        self.assertEqual(captured[-1], ("money", 0, "user:5"))
+        # the server search can't filter by sender: not used for a global From: search
+        self.assertEqual(await service._server_search("money", 0, "user:5"), [])
+        model.setSender("", "")
+        self.assertEqual(model.senderName, "")
+
+
 if __name__ == "__main__":
     unittest.main()

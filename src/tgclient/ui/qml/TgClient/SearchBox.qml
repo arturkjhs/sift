@@ -9,6 +9,7 @@ FocusScope {
     signal edited(string text)
     signal cleared()
     signal submitted(bool backwards)   // Enter (Shift+Enter: backwards)
+    signal escapedEmpty()               // Esc with nothing typed (a typed query is cleared first)
 
     implicitHeight: 34
 
@@ -54,7 +55,14 @@ FocusScope {
             font.pixelSize: Theme.fontBody
             selectByMouse: true
             onTextEdited: root.edited(text)
-            Keys.onEscapePressed: root.clear()
+            Keys.onEscapePressed: {
+                if (input.text !== "") {
+                    input.text = ""
+                    root.edited("")
+                } else {
+                    root.escapedEmpty()
+                }
+            }
             Keys.onReturnPressed: event => root.submitted(event.modifiers & Qt.ShiftModifier)
             Keys.onEnterPressed: event => root.submitted(event.modifiers & Qt.ShiftModifier)
 

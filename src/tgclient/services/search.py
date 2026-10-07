@@ -243,6 +243,8 @@ class SearchService:
             self._index.semantic, vector, chat_id, sender, 100, SEMANTIC_MIN_SCORE)
 
     async def _server_search(self, query: str, chat_id: int, sender: str) -> list[Message]:
+        if sender and not chat_id:
+            return []  # searchMessages has no sender filter: the local index alone
         if chat_id:
             request: dict[str, Any] = {
                 "@type": "searchChatMessages", "chat_id": chat_id, "topic_id": None,

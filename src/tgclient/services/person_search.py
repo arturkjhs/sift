@@ -149,6 +149,40 @@ class PersonSearch:
         return found, cursor
 
 
+_FROM = re.compile(r"(?:^|\s)from:@?([\w.]+)", re.IGNORECASE | re.UNICODE)
+
+
+def split_from(query: str) -> tuple[str, str]:
+    """`from:@username` (or `from:name`) in a search query: (the query without it, the
+    username or ""). Only the first one counts; all are removed."""
+    found = _FROM.search(query)
+    rest = " ".join(_FROM.sub(" ", query).split())
+    return rest, found.group(1) if found else ""
+
+
+async def resolve_sender(client: TdClient, users: Any, chats: ChatStore,
+                         name: str) -> tuple[str, str]:
+    """A `from:` word -> (sender key, display name); ("", "") if nobody matches. Known users
+    first (username, then first name), then a public username on the server."""
+    wanted = name.lower().lstrip("@")
+    known = list(users.users.values())
+    for user in known:
+        if any(u.lower() == wanted for u in user.usernames):
+            return f"user:{user.id}", user.full_name
+    for user in known:
+        if user.first_name.lower() == wanted or user.full_name.lower() == wanted:
+            return f"user:{user.id}", user.full_name
+    try:
+        chat = await client.send({"@type": "searchPublicChat", "username": wanted})
+    except TdError:
+        return "", ""
+    kind = chat.get("type") or {}
+    if kind.get("@type") == "chatTypePrivate":
+        user = users.users.get(kind.get("user_id", 0))
+        return f"user:{kind['user_id']}", user.full_name if user else chat.get("title", name)
+    return f"chat:{chat['id']}", chat.get("title", name)
+
+
 def _same_sender(a: dict[str, Any], b: dict[str, Any]) -> bool:
     return (a.get("@type") == b.get("@type")
             and (a.get("user_id") or a.get("chat_id")) == (b.get("user_id") or b.get("chat_id")))

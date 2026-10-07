@@ -28,6 +28,7 @@ from .models.messages import MessageListModel
 from .models.person_messages import PersonMessagesModel
 from .models.profile import ProfileModel
 from .models.search import SearchModel
+from .models.sender_picker import SenderPicker
 from .models.stickers import StickerModel
 from .models.topics import TopicListModel
 from .models.viewer import ViewerModel
@@ -197,7 +198,9 @@ class Session:
             self.client, self.chats, self.users,
             search_index, embedder, self.ai_service,
         )
-        self.search = SearchModel(self.search_service, self.chats)
+        self.search = SearchModel(self.search_service, self.chats, client=self.client,
+                                  users=self.users)
+        self.sender_picker = SenderPicker(self.client, self.chats, self.users)
         self.ai_service.searcher = lambda query, chat_id: self.search_service.search(
             query, chat_id, limit=30)
         self.sticker_store = StickerStore(self.client, self.files)
@@ -440,6 +443,7 @@ def bind_session(engine: QQmlApplicationEngine, images: TdImageProvider,
     context.setContextProperty("voice", session.voice)
     context.setContextProperty("ai", session.ai)
     context.setContextProperty("search", session.search)
+    context.setContextProperty("senderPicker", session.sender_picker)
     context.setContextProperty("emojis", session.emojis)
     context.setContextProperty("stickers", session.stickers)
     context.setContextProperty("gifs", session.gifs)

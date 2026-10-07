@@ -25,7 +25,8 @@ from PySide6.QtCore import (
 from PySide6.QtGui import QDesktopServices, QFontDatabase, QGuiApplication
 
 from ..services.ai import AiService
-from ..services.summary import sender_key
+from ..services.person_search import resolve_sender, split_from
+from ..services.summary import sender_key, sender_object
 from ..store.album import album_layout
 from ..store.chats import ChatStore
 from ..store.custom_emoji import CustomEmojiStore
@@ -221,6 +222,7 @@ class MessageListModel(QAbstractListModel):
     viewCheckNeeded = Signal()  # e.g. a reaction to a message that may be on screen
     scheduledChanged = Signal()
     chatSearchJump = Signal("QVariant")  # a search result to show (QML jumps and flashes)
+    chatSearchQueryRewritten = Signal(str)  # `from:…` taken out of the query: the box shows this
 
     def __init__(
         self, client: TdClient, chats: ChatStore, users: UserStore,
@@ -252,6 +254,8 @@ class MessageListModel(QAbstractListModel):
         self._search_index = -1
         self._search_busy = False
         self._search_color = "#553FB295"
+        self._search_sender = ""  # "From:" filter: "user:<id>" | "chat:<id>" | ""
+        self._search_sender_name = ""
         self._selected: set[int] = set()
         self._reactors: dict[tuple[int, str], list[str]] = {}  # (message, key) -> names
         self._reactors_asked: set[tuple[int, str]] = set()
@@ -432,6 +436,23 @@ class MessageListModel(QAbstractListModel):
     def chatSearchQuery(self) -> str:
         return self._search_query
 
+    @Property(str, notify=chatSearchChanged)
+    def chatSearchSender(self) -> str:
+        return self._search_sender
+
+    @Property(str, notify=chatSearchChanged)
+    def chatSearchSenderName(self) -> str:
+        return self._search_sender_name
+
+    @Slot(str, str)
+    def setChatSearchSender(self, sender: str, name: str) -> None:
+        """The "From:" chip ("" removes it): only that sender's messages, with or without a
+        query (none: all of theirs, newest first)."""
+        if sender == self._search_sender:
+            return
+        self._search_sender, self._search_sender_name = sender, name if sender else ""
+        self._run_chat_search()
+
     @Property(int, notify=chatSearchChanged)
     def chatSearchCount(self) -> int:
         return len(self._search_ids)
@@ -463,17 +484,33 @@ class MessageListModel(QAbstractListModel):
 
     @Slot(str)
     def searchInChat(self, query: str) -> None:
-        """Find messages in the open chat (or topic); jumps to the newest result."""
+        """Find messages in the open chat (or topic); jumps to the newest result.
+        `from:@username` in the query sets the "From:" filter and is taken out."""
+        rest, wanted = split_from(query)
+        if wanted:
+            self.chatSearchQueryRewritten.emit(rest)
+            self._spawn(self._resolve_from(wanted, rest.strip()))
+            return
         query = query.strip()
         if query == self._search_query:
             return
         self._search_query = query
+        self._run_chat_search()
+
+    async def _resolve_from(self, wanted: str, query: str) -> None:
+        sender, name = await resolve_sender(self._client, self._users, self._chats, wanted)
+        self._search_query = query
+        if sender:
+            self._search_sender, self._search_sender_name = sender, name
+        self._run_chat_search()
+
+    def _run_chat_search(self) -> None:
         self._search_ids, self._search_next, self._search_index = [], 0, -1
         self._refresh_html()
         self.chatSearchChanged.emit()
         history = self._history
-        if query and history is not None:
-            self._spawn(self._search_chat(history, query, 0))
+        if history is not None and (self._search_query or self._search_sender):
+            self._spawn(self._search_chat(history, self._search_query, 0))
 
     @Slot()
     def searchOlder(self) -> None:
@@ -489,23 +526,27 @@ class MessageListModel(QAbstractListModel):
 
     @Slot()
     def endChatSearch(self) -> None:
-        self.searchInChat("")
+        self._search_query = ""
+        self._search_sender = self._search_sender_name = ""
+        self._run_chat_search()
 
     async def _search_chat(self, history: ChatHistory, query: str, from_id: int) -> None:
         self._search_busy = True
         self.chatSearchChanged.emit()
+        sender = self._search_sender
         try:
             found = await self._client.send({
                 "@type": "searchChatMessages", "chat_id": history.chat_id,
                 "topic_id": topic_obj(max(history.topic_id, 0)), "query": query,
-                "sender_id": None, "from_message_id": from_id, "offset": 0, "limit": 50,
-                "filter": None})
+                "sender_id": sender_object(sender) if sender else None,
+                "from_message_id": from_id, "offset": 0, "limit": 50, "filter": None})
         except TdError as e:
             log.info("Search in chat failed: %s", e)
             found = {}
         finally:
             self._search_busy = False
-        if history is not self._history or query != self._search_query:
+        if (history is not self._history or query != self._search_query
+                or sender != self._search_sender):
             return
         fresh = [m["id"] for m in found.get("messages") or []
                  if m and m["id"] not in self._search_ids]
@@ -922,6 +963,7 @@ class MessageListModel(QAbstractListModel):
         self._select_anchor = 0
         self._search_query, self._search_ids, self._search_next = "", [], 0
         self._search_index = -1
+        self._search_sender = self._search_sender_name = ""
         self.endResetModel()
         self.chatSearchChanged.emit()
         self.chatChanged.emit()

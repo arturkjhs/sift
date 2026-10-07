@@ -8,7 +8,7 @@ SplitView {
 
     property var selectedChatId: 0       // int53, keep as var
 
-    readonly property bool searching: search.query.trim() !== ""
+    readonly property bool searching: search.query.trim() !== "" || search.senderName !== ""
 
     signal settingsRequested()
 
@@ -70,8 +70,15 @@ SplitView {
                 SearchBox {
                     id: searchField
                     Layout.fillWidth: true
-                    placeholder: qsTr("Search chats and messages")
+                    placeholder: search.senderName !== "" ? qsTr("Search their messages")
+                                                          : qsTr("Search chats and messages")
                     onEdited: text => search.query = text
+                    // Esc: the query first, then the "From:" chip
+                    onEscapedEmpty: search.setSender("", "")
+                    Connections {
+                        target: search
+                        function onQueryRewritten(rest) { searchField.text = rest }
+                    }
                 }
 
                 IconButton {
@@ -106,6 +113,31 @@ SplitView {
                     Accessible.name: qsTr("Settings")
                     onClicked: root.settingsRequested()
                 }
+            }
+
+            // While searching: "From:" — one person's messages (picked, or from:@name).
+            RowLayout {
+                Layout.fillWidth: true
+                Layout.leftMargin: 12
+                Layout.rightMargin: 12
+                visible: searchField.text !== "" || search.senderName !== ""
+                spacing: 6
+                SenderChip {
+                    objectName: "globalSenderChip"
+                    chatId: 0
+                    senderName: search.senderName
+                    onPicked: (sender, name) => search.setSender(sender, name)
+                    onCleared: search.setSender("", "")
+                }
+                Text {
+                    Layout.fillWidth: true
+                    visible: search.senderName === ""
+                    text: qsTr("Only one person's messages: from:@username")
+                    elide: Text.ElideRight
+                    color: Theme.textMuted
+                    font.pixelSize: Theme.fontSmall
+                }
+                Item { Layout.fillWidth: true; visible: search.senderName !== "" }
             }
 
             FolderTabs {

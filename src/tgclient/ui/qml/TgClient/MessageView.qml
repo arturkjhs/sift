@@ -162,6 +162,7 @@ Item {
     Connections {
         target: messages
         function onChatSearchJump(messageId) { root.showMessage(messageId) }
+        function onChatSearchQueryRewritten(rest) { chatSearchBox.text = rest }
         function onChatChanged() {  // another chat or topic: the search is over
             const scope = messages.chatId + "/" + messages.topicId
             if (scope !== chatSearch.scope) {
@@ -346,13 +347,25 @@ Item {
                 anchors.rightMargin: 12
                 spacing: 6
 
+                SenderChip {
+                    objectName: "chatSenderChip"
+                    chatId: messages.chatId
+                    senderName: messages.chatSearchSenderName
+                    onPicked: (sender, name) => messages.setChatSearchSender(sender, name)
+                    onCleared: messages.setChatSearchSender("", "")
+                }
                 SearchBox {
                     id: chatSearchBox
                     objectName: "chatSearchBox"
                     Layout.fillWidth: true
-                    placeholder: qsTr("Search in this chat")
+                    placeholder: messages.chatSearchSenderName !== ""
+                                 ? qsTr("Search their messages")
+                                 : qsTr("Search in this chat (from:@name for one person)")
                     onEdited: text => chatSearchTimer.restart()
                     onCleared: root.closeSearch()
+                    // Esc: the query first, then the "From:" chip, then the search bar
+                    onEscapedEmpty: messages.chatSearchSenderName !== ""
+                                    ? messages.setChatSearchSender("", "") : root.closeSearch()
                     onSubmitted: backwards => backwards ? messages.searchNewer()
                                                         : messages.searchOlder()
                 }
@@ -365,7 +378,8 @@ Item {
                     objectName: "chatSearchCounter"
                     text: messages.chatSearchBusy && messages.chatSearchCount === 0
                           ? qsTr("Searching\u2026")
-                          : messages.chatSearchQuery === "" ? ""
+                          : messages.chatSearchQuery === "" && messages.chatSearchSender === ""
+                            ? ""
                           : messages.chatSearchCount === 0 ? qsTr("Nothing found")
                           : qsTr("%1 of %2").arg(messages.chatSearchIndex)
                               .arg(messages.chatSearchCount + (messages.chatSearchMore ? "+" : ""))

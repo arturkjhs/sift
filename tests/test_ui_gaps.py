@@ -396,5 +396,37 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
         await wait_until(lambda: (self.pump(), self.session.topics.rowCount())[1] == 2)
 
 
+    async def test_from_filter(self) -> None:
+        from PySide6.QtCore import QMetaObject
+
+        self.open_chat(FORUM)
+        self.session.messages.openTopic(7)
+        await wait_until(lambda: (self.pump(), self.session.messages.rowCount())[1] > 0)
+        view = self.item("messageView")
+        QMetaObject.invokeMethod(view, "openSearch")
+        self.session.messages.setChatSearchSender("user:5", "Olena")
+        await wait_until(lambda: (self.pump(), self.session.messages.chatSearchCount)[1] > 0)
+        await self.settle()
+        chat_chip = self.item("chatSenderChip")
+        inner = {i.objectName(): i for i in _all_items(chat_chip)}
+        self.assertTrue(inner["senderChip"].isVisible())
+        _screenshot(self.window, "from-chat")
+        picker_button = inner["senderPickButton"]
+        self.session.messages.setChatSearchSender("", "")
+        await self.settle(0.1)
+        self.assertTrue(picker_button.isVisible())
+        QMetaObject.invokeMethod(view, "closeSearch")
+
+        self.session.search.setSender("user:5", "Olena")
+        await self.settle()
+        chip = next(i for i in _all_items(self.window.contentItem())
+                    if i.objectName() == "globalSenderChip")
+        self.assertTrue(chip.isVisible())
+        _screenshot(self.window, "from-global")
+        self.session.search.setSender("", "")
+        await self.settle(0.1)
+        self.assertEqual(self.warnings, [], "QML warnings with the From: filter")
+
+
 if __name__ == "__main__":
     unittest.main()

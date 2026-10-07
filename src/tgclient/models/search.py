@@ -21,6 +21,7 @@ from PySide6.QtCore import (
     Slot,
 )
 
+from ..services.person_search import resolve_sender, split_from
 from ..services.search import Hit, SearchService
 from ..store.chats import ChatStore
 from ..store.format import initials, short_time
@@ -75,13 +76,20 @@ def snippet_html(text: str, query: str, color: str, limit: int = SNIPPET_CHARS) 
 
 class SearchModel(QAbstractListModel):
     queryChanged = Signal()
+    senderChanged = Signal()
+    queryRewritten = Signal(str)  # `from:…` taken out of the query: the box shows this
     busyChanged = Signal()
     statusChanged = Signal()
 
-    def __init__(self, service: SearchService, chats: ChatStore, parent: Any = None) -> None:
+    def __init__(self, service: SearchService, chats: ChatStore, parent: Any = None,
+                 client: Any = None, users: Any = None) -> None:
         super().__init__(parent)
         self._service = service
         self._chats = chats
+        self._client = client
+        self._users = users
+        self._sender = ""  # "From:" filter
+        self._sender_name = ""
         self._query = ""
         self._rows: list[dict[str, Any]] = []
         self._busy = False
@@ -99,17 +107,48 @@ class SearchModel(QAbstractListModel):
         return self._query
 
     def _set_query(self, query: str) -> None:
+        rest, wanted = split_from(query)
+        if wanted and self._client is not None:
+            self.queryRewritten.emit(rest)
+            task = asyncio.ensure_future(self._resolve_from(wanted, rest))
+            task.add_done_callback(lambda t: t.exception() if not t.cancelled() else None)
+            query = rest
         if query == self._query:
             return
         self._query = query
         self.queryChanged.emit()
-        if query.strip():
+        self._restart()
+
+    async def _resolve_from(self, wanted: str, rest: str) -> None:
+        sender, name = await resolve_sender(self._client, self._users, self._chats, wanted)
+        if sender:
+            self.setSender(sender, name)
+
+    def _restart(self) -> None:
+        if self._query.strip() or self._sender:
             self._timer.start()
         else:
             self._timer.stop()
             self._generation += 1
             self._set_rows([])
             self._set_busy(False)
+
+    @Property(str, notify=senderChanged)
+    def sender(self) -> str:
+        return self._sender
+
+    @Property(str, notify=senderChanged)
+    def senderName(self) -> str:
+        return self._sender_name
+
+    @Slot(str, str)
+    def setSender(self, sender: str, name: str) -> None:
+        """The "From:" chip ("" removes it)."""
+        if sender == self._sender:
+            return
+        self._sender, self._sender_name = sender, name if sender else ""
+        self.senderChanged.emit()
+        self._restart()
 
     query = Property(str, _get_query, _set_query, notify=queryChanged)
 
@@ -169,6 +208,7 @@ class SearchModel(QAbstractListModel):
 
     @Slot()
     def clear(self) -> None:
+        self.setSender("", "")
         self._set_query("")
 
     # --- QAbstractListModel -----------------------------------------------------------------
@@ -201,13 +241,14 @@ class SearchModel(QAbstractListModel):
         self._generation += 1
         generation = self._generation
         query = self._query.strip()
-        chats = self._chat_rows(query)
+        sender = self._sender
+        chats = [] if sender else self._chat_rows(query)  # From: only messages
         self._set_rows(chats + self._rows_after_chats())
         self._set_busy(True)
 
         async def search() -> None:
             try:
-                hits = await self._service.search(query)
+                hits = await self._service.search(query, sender=sender) if query else []
             except Exception:
                 log.exception("Search failed")
                 hits = []

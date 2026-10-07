@@ -483,5 +483,11 @@
 "Language": "Язык",
 "Messages from %1": "Сообщения от %1",
 "Messages on behalf of %1": "Сообщения от имени %1",
-"Search their messages": "Поиск по их сообщениям"
+"Search their messages": "Поиск по их сообщениям",
+"Only messages from…": "Только сообщения от…",
+"From: %1": "От: %1",
+"Any sender": "Любой отправитель",
+"Name or @username": "Имя или @username",
+"Search in this chat (from:@name for one person)": "Поиск в чате (from:@имя — от одного человека)",
+"Only one person's messages: from:@username": "Сообщения одного человека: from:@username"
 }
