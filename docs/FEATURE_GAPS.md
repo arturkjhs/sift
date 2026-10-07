@@ -194,9 +194,10 @@
   → `models/contacts.py` + `ContactsDialog.qml`, «Add contact» в профиле.
 - [x] Создание групп и каналов, инвайт-ссылки, базовая админка (права, бан, удаление).
   → `ui/group_admin.py` (`groupAdmin`), `NewChatDialog.qml`, инструменты админа в `ProfilePanel.qml`.
-- [ ] Настройки приватности (`getUserPrivacySettingRules` / `setUserPrivacySettingRules`),
+- [x] Настройки приватности (`getUserPrivacySettingRules` / `setUserPrivacySettingRules`),
   уведомлений по типам чатов, хранилище и очистка кэша (`getStorageStatistics`,
   `optimizeStorage`).
+  → `ui/privacy.py` (`privacy`): разделы Privacy/Storage и уведомления по типам чатов в настройках.
 - [ ] Прокси (SOCKS5, MTProto: `addProxy`, `enableProxy`).
 - [ ] Локализация интерфейса RU/UA/CZ (строки уже в `qsTr()`).
 - [ ] Транскрипция через TDLib `recognizeSpeech` для Premium-аккаунтов (бесплатно,

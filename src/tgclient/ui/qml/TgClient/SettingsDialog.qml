@@ -12,7 +12,10 @@ Popup {
     height: Math.min(flick.contentHeight + topPadding + bottomPadding, parent.height - 48)
     modal: true
     padding: 22
-    onAboutToShow: devices.refresh()
+    onAboutToShow: {
+        devices.refresh()
+        privacy.load()
+    }
 
     background: Rectangle {
         radius: 12
@@ -167,6 +170,30 @@ Popup {
                     onToggled: notifications.setSound(checked)
                 }
             }
+            Repeater {  // by chat type
+                model: [
+                    { key: "private", label: qsTr("Private chats") },
+                    { key: "groups", label: qsTr("Groups") },
+                    { key: "channels", label: qsTr("Channels") },
+                ]
+                RowLayout {
+                    id: scopeRow
+                    required property var modelData
+                    Layout.fillWidth: true
+                    visible: privacy.scopes[modelData.key] !== undefined
+                    spacing: 12
+                    Text {
+                        Layout.fillWidth: true
+                        text: scopeRow.modelData.label
+                        color: Theme.text
+                        font.pixelSize: Theme.fontBody
+                    }
+                    ToggleSwitch {
+                        checked: privacy.scopes[scopeRow.modelData.key] === true
+                        onToggled: privacy.setScope(scopeRow.modelData.key, checked)
+                    }
+                }
+            }
             PillButton {
                 text: qsTr("Send a test notification")
                 iconName: "bell"
@@ -318,6 +345,71 @@ Popup {
                         }
                     }
                 }
+            }
+
+            SectionTitle {
+                objectName: "privacySection"
+                text: qsTr("Privacy")
+            }
+            Repeater {
+                model: [
+                    { key: "lastSeen", label: qsTr("Last seen and online") },
+                    { key: "photo", label: qsTr("Profile photo") },
+                    { key: "phone", label: qsTr("Phone number") },
+                    { key: "findByPhone", label: qsTr("Find me by my number") },
+                    { key: "forwards", label: qsTr("Link to me in forwards") },
+                    { key: "invites", label: qsTr("Add me to groups") },
+                    { key: "calls", label: qsTr("Calls") },
+                    { key: "bio", label: qsTr("Bio") },
+                ]
+                RowLayout {
+                    id: privacyRow
+                    required property var modelData
+                    readonly property string choice: privacy.choices[modelData.key] || ""
+                    Layout.fillWidth: true
+                    visible: choice !== ""
+                    spacing: 4
+                    Text {
+                        Layout.fillWidth: true
+                        text: privacyRow.modelData.label
+                        color: Theme.text
+                        font.pixelSize: Theme.fontBody
+                    }
+                    Repeater {
+                        model: privacyRow.modelData.key === "findByPhone"
+                               ? ["everybody", "contacts"] : ["everybody", "contacts", "nobody"]
+                        PillButton {
+                            required property string modelData
+                            text: modelData === "everybody" ? qsTr("All")
+                                  : modelData === "contacts" ? qsTr("Contacts") : qsTr("Nobody")
+                            filled: privacyRow.choice === modelData
+                            onClicked: privacy.choose(privacyRow.modelData.key, modelData)
+                        }
+                    }
+                }
+            }
+            Paragraph {
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                text: qsTr("Exceptions for particular people and chats set in other apps stay "
+                           + "as they are.")
+            }
+
+            SectionTitle {
+                objectName: "storageSection"
+                text: qsTr("Storage")
+            }
+            Paragraph {
+                text: qsTr("Media and files: %1 (%2 files) · Telegram database: %3 · AI and "
+                           + "search: %4").arg(privacy.storage.files || "\u2026")
+                      .arg(privacy.storage.fileCount || 0).arg(privacy.storage.database || "\u2026")
+                      .arg(privacy.storage.ai || "\u2026")
+            }
+            PillButton {
+                text: privacy.busy ? qsTr("Clearing\u2026") : qsTr("Clear media cache")
+                iconName: "trash"
+                enabled: !privacy.busy
+                onClicked: privacy.clearCache()
             }
 
             SectionTitle {

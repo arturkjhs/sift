@@ -468,6 +468,10 @@ src/tgclient/
   «Add members» (`addChatMembers`), правка имени/описания, удаление (владелец, `deleteChat`);
   правый клик по участнику — админ (`setChatMemberStatus` с `ADMIN_RIGHTS`, без права
   назначать других) / снять / удалить (`banChatMember`).
+- Приватность/хранилище (`PrivacyController` = `privacy`, грузится при открытии настроек):
+  правило «All/Contacts/Nobody» заменяет только главное правило, исключения для людей и чатов
+  сохраняются (`with_main_rule`); уведомления по типам чатов — `setScopeNotificationSettings`
+  (`mute_for` 0 / год); «Clear media cache» — `optimizeStorage` с нулевыми лимитами.
 - Контакты: кнопка-человек в сайдбаре → `ContactsDialog` (`ContactsModel` = `contacts`):
   `getContacts`/`searchContacts`, онлайн сверху, клик — `createPrivateChat` → открыть;
   «Add» — `importContacts` по номеру (нет в Telegram — ошибка); в профиле не-контакта —

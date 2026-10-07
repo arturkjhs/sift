@@ -56,6 +56,7 @@ from .ui.chat_actions import ChatActions
 from .ui.devices import DevicesController
 from .ui.folders import FolderEditor
 from .ui.group_admin import GroupAdmin
+from .ui.privacy import PrivacyController
 from .ui.icons import IconProvider
 from .ui.lock import LockController
 from .ui.images import TdImageProvider
@@ -144,6 +145,8 @@ class Session:
         self.folder_editor = FolderEditor(self.client, self.chats)
         self.contacts = ContactsModel(self.client, self.users, self.files, self.presence)
         self.group_admin = GroupAdmin(self.client, self.chats, self.presence)
+        self.privacy = PrivacyController(self.client,
+                                         [settings.ai_db_path, settings.search_db_path])
         self.folders = FolderModel(self.chats)
         if router is None and settings.openrouter_api_key:
             router = OpenRouter(settings.openrouter_api_key)
@@ -420,6 +423,7 @@ def bind_session(engine: QQmlApplicationEngine, images: TdImageProvider,
     context.setContextProperty("folderEditor", session.folder_editor)
     context.setContextProperty("contacts", session.contacts)
     context.setContextProperty("groupAdmin", session.group_admin)
+    context.setContextProperty("privacy", session.privacy)
     context.setContextProperty("folders", session.folders)
     context.setContextProperty("messages", session.messages)
     context.setContextProperty("topics", session.topics)
