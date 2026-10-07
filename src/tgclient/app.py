@@ -51,6 +51,7 @@ from .ui.ai_controller import AiController
 from .ui.animation import register_qml_types
 from .ui.auth_controller import AuthController
 from .ui.chat_actions import ChatActions
+from .ui.devices import DevicesController
 from .ui.icons import IconProvider
 from .ui.lock import LockController
 from .ui.images import TdImageProvider
@@ -133,6 +134,7 @@ class Session:
         self.chat_list = ChatListModel(self.chats, self.users, self.presence)
         self.chat_actions = ChatActions(self.client, self.chats)
         self.profile = ProfileModel(self.client, self.chats, self.users, self.presence)
+        self.devices = DevicesController(self.client)
         self.folders = FolderModel(self.chats)
         if router is None and settings.openrouter_api_key:
             router = OpenRouter(settings.openrouter_api_key)
@@ -399,6 +401,7 @@ def bind_session(engine: QQmlApplicationEngine, images: TdImageProvider,
     context.setContextProperty("chatList", session.chat_list)
     context.setContextProperty("chatActions", session.chat_actions)
     context.setContextProperty("profile", session.profile)
+    context.setContextProperty("devices", session.devices)
     context.setContextProperty("folders", session.folders)
     context.setContextProperty("messages", session.messages)
     context.setContextProperty("topics", session.topics)

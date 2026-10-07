@@ -58,6 +58,7 @@ src/tgclient/
              search.py (результаты поиска: секции, debounce, сниппеты), topics.py (темы форума),
              profile.py (панель профиля чата/человека)
   ui/        QObject-контроллеры (auth_controller, shell, voice_player, ai_controller,
+             lock (пароль и блокировка), chat_actions (меню чата), devices (сессии),
              notifications: системные уведомления + бейдж, accounts: мультиаккаунт,
              recorder: запись голосовых, updates: автообновление), animation.py (TGS/WebM:
              кадры + QML-тип `TgClient.Native/AnimatedImage`), image providers

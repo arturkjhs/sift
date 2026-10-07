@@ -12,6 +12,7 @@ Popup {
     height: Math.min(flick.contentHeight + topPadding + bottomPadding, parent.height - 48)
     modal: true
     padding: 22
+    onAboutToShow: devices.refresh()
 
     background: Rectangle {
         radius: 12
@@ -317,6 +318,82 @@ Popup {
                         }
                     }
                 }
+            }
+
+            SectionTitle {
+                objectName: "devicesSection"
+                text: qsTr("Devices")
+            }
+            Paragraph {
+                color: Theme.textMuted
+                font.pixelSize: Theme.fontSmall
+                text: qsTr("Where this account is logged in. End a session you don't recognize.")
+            }
+            Repeater {
+                model: devices.sessions
+                RowLayout {
+                    id: deviceRow
+                    required property var modelData
+                    Layout.fillWidth: true
+                    spacing: 10
+                    ColumnLayout {
+                        Layout.fillWidth: true
+                        spacing: 1
+                        Text {
+                            Layout.fillWidth: true
+                            text: deviceRow.modelData.title
+                                  + (deviceRow.modelData.current ? "  \u00b7  " + qsTr("this device")
+                                                                 : "")
+                            textFormat: Text.PlainText
+                            elide: Text.ElideRight
+                            color: Theme.text
+                            font.pixelSize: Theme.fontBody
+                            font.weight: Font.DemiBold
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            text: deviceRow.modelData.details
+                            textFormat: Text.PlainText
+                            elide: Text.ElideRight
+                            color: Theme.textMuted
+                            font.pixelSize: Theme.fontSmall
+                        }
+                        Text {
+                            Layout.fillWidth: true
+                            visible: text !== ""
+                            text: [deviceRow.modelData.place, deviceRow.modelData.active]
+                                  .filter(p => p !== "").join(" \u00b7 ")
+                            textFormat: Text.PlainText
+                            elide: Text.ElideRight
+                            color: deviceRow.modelData.current ? Theme.accent : Theme.textMuted
+                            font.pixelSize: Theme.fontSmall
+                        }
+                    }
+                    PillButton {
+                        visible: !deviceRow.modelData.current
+                        text: qsTr("End")
+                        danger: true
+                        onClicked: devices.terminate(deviceRow.modelData.id)
+                    }
+                }
+            }
+            Text {
+                visible: devices.error !== ""
+                text: devices.error
+                color: Theme.danger
+                font.pixelSize: Theme.fontSmall
+            }
+            PillButton {
+                visible: devices.sessions.length > 1
+                text: qsTr("End all other sessions")
+                danger: true
+                onClicked: devicesConfirm.ask(qsTr("End all other sessions?"),
+                                              qsTr("Every other device will be logged out."),
+                                              qsTr("End sessions"), "", null)
+            }
+            ConfirmDialog {
+                id: devicesConfirm
+                onAccepted: devices.terminateOthers()
             }
 
             SectionTitle { text: qsTr("Updates") }

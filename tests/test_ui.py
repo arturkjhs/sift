@@ -151,6 +151,11 @@ def responder(req: dict[str, Any]) -> list[dict[str, Any]]:
                           reply_to=1)]
             return [{"@type": "foundChatMessages", "total_count": 1, "next_from_message_id": 0,
                      "messages": found, "@extra": req["@extra"]}]
+        case "getActiveSessions":
+            import test_devices
+
+            return [{"@type": "sessions", "sessions": test_devices.SESSIONS,
+                     "inactive_session_ttl_days": 180, "@extra": req["@extra"]}]
         case "getMessages":
             return [{"@type": "messages", "total_count": 0, "messages": [],
                      "@extra": req["@extra"]}]
@@ -812,6 +817,12 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         await settle()
         self.assertEqual(warnings, [], "QML warnings in settings")
         _screenshot(window, "settings")
+        devices_section = settings_dialog.findChild(QQuickItem, "devicesSection")
+        flick = settings_dialog.property("contentItem")
+        flick.setProperty("contentY", max(0.0, devices_section.mapToItem(
+            flick.property("contentItem"), 0, 0).y() - 40))
+        await settle()
+        _screenshot(window, "settings-devices")
         session.ai.setReads("uk", True)
         self.assertEqual(session.prefs.get("read_languages"), ["uk"])
         self.assertIn("uk", session.ai.readLanguages)
