@@ -20,6 +20,7 @@ class User:
     is_bot: bool = False
     is_verified: bool = False
     phone: str = ""
+    is_contact: bool = False
 
     @property
     def full_name(self) -> str:
@@ -69,6 +70,7 @@ class UserStore:
             is_verified=bool((raw.get("verification_status") or {}).get("is_verified")
                              or raw.get("is_verified")),
             phone=raw.get("phone_number", ""),
+            is_contact=bool(raw.get("is_contact")),
         )
         self._emit(raw["id"])
 

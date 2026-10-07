@@ -56,7 +56,7 @@ src/tgclient/
              статус в шапке), composer.py (черновики, вложения, вставка из буфера, свой typing),
              chat_picker.py (выбор чата для пересылки), viewer.py (полноэкранный просмотрщик),
              search.py (результаты поиска: секции, debounce, сниппеты), topics.py (темы форума),
-             profile.py (панель профиля чата/человека)
+             profile.py (панель профиля чата/человека), contacts.py (контакты), gifs.py (GIF)
   ui/        QObject-контроллеры (auth_controller, shell, voice_player, ai_controller,
              lock (пароль и блокировка), chat_actions (меню чата), devices (сессии),
              notifications: системные уведомления + бейдж, accounts: мультиаккаунт,
@@ -458,6 +458,10 @@ src/tgclient/
   `getChatFolder` → `FolderEditorDialog` (имя ≤ 12, типы чатов, выбранные чаты) →
   `createChatFolder`/`editChatFolder` (иконка, цвет, исключённые чаты сохраняются как были),
   `deleteChatFolder`, «Move left/right» — `reorderChatFolders` с позицией «All chats».
+- Контакты: кнопка-человек в сайдбаре → `ContactsDialog` (`ContactsModel` = `contacts`):
+  `getContacts`/`searchContacts`, онлайн сверху, клик — `createPrivateChat` → открыть;
+  «Add» — `importContacts` по номеру (нет в Telegram — ошибка); в профиле не-контакта —
+  «Add contact» (`addContact`).
 - Меню чата в списке (правый клик): `ChatActions` (`chatActions` в QML) — закрепить
   (`toggleChatIsPinned` в текущем списке), mute на 1 ч / 8 ч / 2 дня / навсегда
   (`setChatNotificationSettings`: полный объект настроек чата из `Chat.notification_settings`,

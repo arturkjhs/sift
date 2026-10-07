@@ -177,6 +177,13 @@ Rectangle {
                         onClicked: root.searchRequested()
                     }
                     PillButton {
+                        objectName: "addToContacts"
+                        visible: profile.isUser && !profile.isContact
+                        text: qsTr("Add contact")
+                        iconName: "person"
+                        onClicked: contacts.addFromProfile(profile.userId, false)
+                    }
+                    PillButton {
                         objectName: "profileMute"
                         visible: profile.chatId !== 0
                         text: profile.muted ? qsTr("Unmute") : qsTr("Mute")

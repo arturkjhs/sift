@@ -57,6 +57,8 @@ class ProfileModel(QObject):
         self._tasks: set[asyncio.Task[Any]] = set()
         chats.files.subscribe(self._on_file)
         chats.subscribe(self._on_chats)
+        users.subscribe(lambda user_id: self.changed.emit()
+                        if user_id and user_id == self._user_id else None)
 
     # --- QML API ----------------------------------------------------------------------------
 
@@ -131,6 +133,11 @@ class ProfileModel(QObject):
     @Property(int, notify=changed)
     def colorIndex(self) -> int:
         return abs(self._user_id or self._chat_id) % AVATAR_COLORS
+
+    @Property(bool, notify=changed)
+    def isContact(self) -> bool:
+        user = self._users.users.get(self._user_id) if self._user_id else None
+        return bool(user and (user.is_contact or user.id == self._users.my_id))
 
     @Property(bool, notify=changed)
     def muted(self) -> bool:

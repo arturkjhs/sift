@@ -161,6 +161,9 @@ def responder(req: dict[str, Any]) -> list[dict[str, Any]]:
                                                      "is_downloading_completed": True}
                 found.append(gif)
             return [{"@type": "animations", "animations": found, "@extra": req["@extra"]}]
+        case "getContacts":
+            return [{"@type": "users", "total_count": 1, "user_ids": [5],
+                     "@extra": req["@extra"]}]
         case "getActiveSessions":
             import test_devices
 
@@ -816,6 +819,15 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         QMetaObject.invokeMethod(scheduled_list, "close")
         await settle(0.15)
         self.assertEqual(warnings, [], "QML warnings when scheduling")
+
+        # Contacts
+        contacts_dialog = window.findChild(QObject, "contactsDialog")
+        QMetaObject.invokeMethod(contacts_dialog, "show")
+        await settle()
+        self.assertTrue(contacts_dialog.property("opened"))
+        _screenshot(window, "contacts")
+        QMetaObject.invokeMethod(contacts_dialog, "close")
+        await settle(0.15)
 
         # Folders: the editor; the archive as a row on top of all chats
         folder_dialog = window.findChild(QObject, "folderEditorDialog")

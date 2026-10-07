@@ -190,7 +190,8 @@
   → M9: `ui/animation.py`, `store/custom_emoji.py` (анимированные кастомные эмодзи — первым кадром).
 - [x] Поиск и отправка GIF, создание опросов, запись кружков.
   → `models/gifs.py` (вкладка GIFs, @gif), `PollEditor.qml` + `messages.sendPoll`, `ui/video_note.py` (камера → H.264/AAC MP4).
-- [ ] Контакты: список, поиск, добавление.
+- [x] Контакты: список, поиск, добавление.
+  → `models/contacts.py` + `ContactsDialog.qml`, «Add contact» в профиле.
 - [ ] Создание групп и каналов, инвайт-ссылки, базовая админка (права, бан, удаление).
 - [ ] Настройки приватности (`getUserPrivacySettingRules` / `setUserPrivacySettingRules`),
   уведомлений по типам чатов, хранилище и очистка кэша (`getStorageStatistics`,

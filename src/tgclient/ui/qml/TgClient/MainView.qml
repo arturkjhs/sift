@@ -75,6 +75,14 @@ SplitView {
                 }
 
                 IconButton {
+                    objectName: "contactsButton"
+                    iconName: "person"
+                    glyphSize: 15
+                    Accessible.name: qsTr("Contacts")
+                    onClicked: contactsDialog.show()
+                }
+
+                IconButton {
                     objectName: "digestButton"
                     visible: ai.configured
                     iconName: "inbox"
@@ -428,6 +436,15 @@ SplitView {
 
     FolderEditorDialog {
         id: folderDialog
+    }
+
+    ContactsDialog {
+        id: contactsDialog
+    }
+
+    Connections {
+        target: contacts
+        function onChatReady(chatId) { root.openChat(chatId, 0) }
     }
 
     ConfirmDialog {

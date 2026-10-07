@@ -20,6 +20,7 @@ from .config import APP_ID, APP_NAME, Settings, build_info, load_settings
 from .models.chat_list import ChatListModel
 from .models.chat_picker import ChatPickerModel
 from .models.composer import ComposerModel
+from .models.contacts import ContactsModel
 from .models.emoji import EmojiModel
 from .models.folders import FolderModel
 from .models.gifs import GifModel
@@ -140,6 +141,7 @@ class Session:
         self.profile = ProfileModel(self.client, self.chats, self.users, self.presence)
         self.devices = DevicesController(self.client)
         self.folder_editor = FolderEditor(self.client, self.chats)
+        self.contacts = ContactsModel(self.client, self.users, self.files, self.presence)
         self.folders = FolderModel(self.chats)
         if router is None and settings.openrouter_api_key:
             router = OpenRouter(settings.openrouter_api_key)
@@ -414,6 +416,7 @@ def bind_session(engine: QQmlApplicationEngine, images: TdImageProvider,
     context.setContextProperty("profile", session.profile)
     context.setContextProperty("devices", session.devices)
     context.setContextProperty("folderEditor", session.folder_editor)
+    context.setContextProperty("contacts", session.contacts)
     context.setContextProperty("folders", session.folders)
     context.setContextProperty("messages", session.messages)
     context.setContextProperty("topics", session.topics)
