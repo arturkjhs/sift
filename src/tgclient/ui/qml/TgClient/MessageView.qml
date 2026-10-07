@@ -85,6 +85,7 @@ Item {
     Binding { target: messages; property: "codeBackground"; value: Theme.codeBackground.toString() }
     Binding { target: messages; property: "spoilerColor"; value: Theme.spoiler.toString() }
     Binding { target: ai; property: "chatId"; value: messages.chatId }
+    Binding { target: ai; property: "topicId"; value: messages.topicId }
     Binding { target: ai; property: "linkColor"; value: Theme.link.toString() }
     Binding { target: ai; property: "codeBackground"; value: Theme.codeBackground.toString() }
 
@@ -137,16 +138,29 @@ Item {
             implicitHeight: 52
             color: Theme.sidebar
 
+            IconButton {  // in a forum topic: back to the list of topics
+                id: topicBack
+                objectName: "topicBack"
+                x: 8
+                anchors.verticalCenter: parent.verticalCenter
+                visible: messages.topicId !== 0
+                iconName: "back"
+                glyphSize: 16
+                Accessible.name: qsTr("All topics")
+                onClicked: messages.closeTopic()
+            }
+
             Column {
-                anchors.left: parent.left
-                anchors.leftMargin: 16
+                anchors.left: topicBack.visible ? topicBack.right : parent.left
+                anchors.leftMargin: topicBack.visible ? 4 : 16
                 anchors.right: aiTools.left
                 anchors.rightMargin: 8
                 anchors.verticalCenter: parent.verticalCenter
 
                 Text {
                     width: parent.width
-                    text: messages.chatTitle
+                    text: messages.topicId !== 0 && messages.topicName !== "" ? messages.topicName
+                                                                              : messages.chatTitle
                     textFormat: Text.PlainText
                     elide: Text.ElideRight
                     color: Theme.text
@@ -156,7 +170,10 @@ Item {
                 Text {
                     objectName: "chatStatus"
                     width: parent.width
-                    text: messages.chatStatus !== "" ? messages.chatStatus
+                    text: messages.topicId !== 0 ? messages.chatTitle
+                          : messages.topicsMode ? (topicList.count === 1 ? qsTr("1 topic")
+                                                   : qsTr("%1 topics").arg(topicList.count))
+                          : messages.chatStatus !== "" ? messages.chatStatus
                           : messages.loading ? qsTr("Loading messages") : ""
                     visible: text !== ""
                     textFormat: Text.PlainText
@@ -316,6 +333,7 @@ Item {
 
                 Layout.fillWidth: true
                 Layout.fillHeight: true
+                visible: !messages.topicsMode
                 clip: true
                 model: messages
                 // Row 0 is the newest message: older pages are appended on top without moving
@@ -401,6 +419,14 @@ Item {
                 }
             }
 
+            TopicList {
+                id: topicList
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                visible: messages.topicsMode
+                onTopicPicked: id => messages.openTopic(id)
+            }
+
             Rectangle {
                 Layout.fillHeight: true
                 implicitWidth: 1
@@ -482,7 +508,7 @@ Item {
         Composer {
             id: composer
             Layout.fillWidth: true
-            visible: messages.canWrite && !selectionBar.visible
+            visible: messages.canWrite && !selectionBar.visible && !messages.topicsMode
             replyToId: root.replyToId
             onCancelReply: root.replyToId = 0
             onSent: {

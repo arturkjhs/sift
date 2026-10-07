@@ -41,6 +41,7 @@ from ..store.format import (
 )
 from ..store.history import DELETED_REPLY, ChatHistory, Commit, Message
 from ..store.link_preview import message_link_preview
+from ..store.forums import ForumStore, Topic, message_topic_id, topic_obj
 from ..store.pinned import PinnedMessages
 from ..store.media import (
     Media,
@@ -71,6 +72,7 @@ log = logging.getLogger(__name__)
 AVATAR_COLORS = 7
 GROUP_WINDOW_SECONDS = 5 * 60
 EDIT_WINDOW_SECONDS = 48 * 3600  # fallback when getMessageProperties isn't available
+TOPIC_LIST = -1  # ChatHistory.topic_id while a forum shows its list of topics: loads nothing
 NEAR_JUMP_PAGES = 3  # a jump this close pages older history in; farther ones reload around it
 ALBUM_WIDTH = 320  # albums are laid out for this width; QML scales down narrower bubbles
 AUTOPLAY_MAX_BYTES = 10 * 1024 * 1024  # GIFs up to this size download and play by themselves
@@ -208,6 +210,7 @@ class MessageListModel(QAbstractListModel):
         self, client: TdClient, chats: ChatStore, users: UserStore,
         ai: AiService | None = None, presence: PresenceStore | None = None,
         parent: Any = None, emoji: CustomEmojiStore | None = None,
+        forums: ForumStore | None = None,
     ) -> None:
         super().__init__(parent)
         self._client = client
@@ -240,6 +243,9 @@ class MessageListModel(QAbstractListModel):
         self._presence = presence
         if presence is not None:
             presence.subscribe(self._on_presence)
+        self._forums = forums
+        if forums is not None:
+            forums.subscribe(self._on_forums)
         self._emoji = emoji
         self._emoji_waiting: dict[str, set[int]] = {}  # custom emoji id -> message ids
         if emoji is not None:
@@ -498,18 +504,18 @@ class MessageListModel(QAbstractListModel):
 
     @Property(int, notify=countersChanged)
     def unreadCount(self) -> int:
-        chat = self._chat()
-        return chat.unread_count if chat else 0
+        counter = self._topic() or self._chat()
+        return counter.unread_count if counter else 0
 
     @Property(int, notify=countersChanged)
     def mentionCount(self) -> int:
-        chat = self._chat()
-        return chat.unread_mention_count if chat else 0
+        counter = self._topic() or self._chat()
+        return counter.unread_mention_count if counter and not self.topicsMode else 0
 
     @Property(int, notify=countersChanged)
     def reactionCount(self) -> int:
-        chat = self._chat()
-        return chat.unread_reaction_count if chat else 0
+        counter = self._topic() or self._chat()
+        return counter.unread_reaction_count if counter and not self.topicsMode else 0
 
     @Property(str, notify=statusChanged)
     def chatStatus(self) -> str:
@@ -563,9 +569,36 @@ class MessageListModel(QAbstractListModel):
         self.close()
         if not chat_id:
             return
+        # A forum opens on its list of topics: no history until one is picked.
+        self._start(chat_id, TOPIC_LIST if self._is_forum_chat(chat_id) else 0)
+        self._spawn(self._client.send({"@type": "openChat", "chat_id": chat_id}))
+        if self._forums is not None and self.topicsMode:
+            self._spawn(self._forums.load(chat_id))
+
+    @Slot("QVariant")
+    def openTopic(self, topic_id: Any) -> None:
+        """Show one topic of the open forum."""
+        history = self._history
+        topic_id = int(topic_id or 0)
+        if history is None or not topic_id or history.topic_id == topic_id:
+            return
+        self._stop()
+        self._start(history.chat_id, topic_id)
+
+    @Slot()
+    def closeTopic(self) -> None:
+        """Back to the forum's list of topics."""
+        history = self._history
+        if history is None or history.topic_id in (0, TOPIC_LIST):
+            return
+        self._stop()
+        self._start(history.chat_id, TOPIC_LIST)
+
+    def _start(self, chat_id: int, topic_id: int) -> None:
         ref: list[ChatHistory] = []
         history = ChatHistory(self._client, chat_id, _Adapter(self, ref),
-                              last_message_id=lambda: self._last_message_id(chat_id))
+                              last_message_id=lambda: self._last_message_id(chat_id, topic_id),
+                              topic_id=topic_id)
         ref.append(history)
         self.beginResetModel()
         self._history = history
@@ -574,8 +607,14 @@ class MessageListModel(QAbstractListModel):
         self._media_cache = {}
         self._file_messages = {}
         chat = self._chats.chats.get(chat_id)
-        self._unread_after = (chat.last_read_inbox_message_id
-                              if chat and chat.unread_count > 0 else 0)
+        topic = self._topic()
+        if topic is not None:
+            self._unread_after = (topic.last_read_inbox_message_id
+                                  if topic.unread_count > 0 else 0)
+        else:
+            self._unread_after = (chat.last_read_inbox_message_id
+                                  if chat and chat.unread_count > 0
+                                  and topic_id != TOPIC_LIST else 0)
         self._first_unread = 0
         self._selected = set()
         self._select_anchor = 0
@@ -585,22 +624,29 @@ class MessageListModel(QAbstractListModel):
         self.countersChanged.emit()
         self.selectionChanged.emit()
         self._sync_latest()
-        self._pinned = PinnedMessages(self._client, chat_id, self.pinnedChanged.emit)
+        if topic_id == TOPIC_LIST:
+            return
+        self._pinned = PinnedMessages(self._client, chat_id, self.pinnedChanged.emit,
+                                      topic_obj(topic_id))
         self.pinnedChanged.emit()
-        self._spawn(self._client.send({"@type": "openChat", "chat_id": chat_id}))
         self._spawn(self._run_load(history, self._load_initial(history)))
         self._spawn(self._pinned.load())
+
+    def _stop(self) -> None:
+        """Drop the current history (chat or topic) without leaving the chat."""
+        if self._history is not None:
+            self._history.dispose()
+        if self._pinned is not None:
+            self._pinned.dispose()
+            self._pinned = None
+            self.pinnedChanged.emit()
 
     @Slot()
     def close(self) -> None:
         if self._history is None:
             return
         history = self._history
-        history.dispose()
-        if self._pinned is not None:
-            self._pinned.dispose()
-            self._pinned = None
-            self.pinnedChanged.emit()
+        self._stop()
         self.beginResetModel()
         self._history = None
         self._html_cache = {}
@@ -609,6 +655,64 @@ class MessageListModel(QAbstractListModel):
         self.endResetModel()
         self.chatChanged.emit()
         self._spawn(self._client.send({"@type": "closeChat", "chat_id": history.chat_id}))
+
+    # --- forums -----------------------------------------------------------------------------
+
+    @Property(bool, notify=chatChanged)
+    def isForum(self) -> bool:
+        return self._history is not None and self._is_forum_chat(self._history.chat_id)
+
+    @Property(bool, notify=chatChanged)
+    def topicsMode(self) -> bool:
+        """A forum's list of topics is shown instead of messages."""
+        return self._history is not None and self._history.topic_id == TOPIC_LIST
+
+    @Property("QVariant", notify=chatChanged)
+    def topicId(self) -> int:
+        history = self._history
+        return history.topic_id if history and history.topic_id != TOPIC_LIST else 0
+
+    @Property(str, notify=chatChanged)
+    def topicName(self) -> str:
+        topic = self._topic()
+        return topic.name if topic else ""
+
+    def current_draft(self) -> dict[str, Any] | None:
+        """TDLib draftMessage of the open chat, or of the open forum topic."""
+        topic = self._topic()
+        if topic is not None:
+            return topic.draft
+        chat = self._chat()
+        return chat.draft if chat is not None and not self.topicsMode else None
+
+    def topic_obj(self) -> dict[str, Any] | None:
+        """MessageTopic of the open topic for requests (sending, drafts, typing)."""
+        return topic_obj(self.topicId)
+
+    def _topic(self) -> Topic | None:
+        history = self._history
+        if history is None or self._forums is None or history.topic_id in (0, TOPIC_LIST):
+            return None
+        return self._forums.get(history.chat_id, history.topic_id)
+
+    def _is_forum_chat(self, chat_id: int) -> bool:
+        chat = self._chats.chats.get(chat_id)
+        return (self._forums is not None and chat is not None and chat.type == "supergroup"
+                and self._forums.is_forum(chat.peer_id))
+
+    def _on_forums(self, kind: str, payload: Any) -> None:
+        history = self._history
+        if history is None:
+            return
+        if kind == "forum":
+            chat = self._chat()
+            if chat is not None and chat.peer_id == payload:
+                chat_id = history.chat_id  # became (or stopped being) a forum: reopen
+                self.close()
+                self.open(chat_id)
+        elif kind == "topic" and payload == (history.chat_id, history.topic_id):
+            self.chatChanged.emit()
+            self.countersChanged.emit()
 
     @Slot()
     def loadOlder(self) -> None:
@@ -651,15 +755,25 @@ class MessageListModel(QAbstractListModel):
 
     @Slot()
     def readAllMentions(self) -> None:
-        if self._history is not None:
+        history = self._history
+        if history is not None and self.topicId:
+            self._spawn(self._request({"@type": "readAllForumTopicMentions",
+                                       "chat_id": history.chat_id,
+                                       "forum_topic_id": history.topic_id}, "Reading mentions"))
+        elif history is not None:
             self._spawn(self._request({"@type": "readAllChatMentions",
-                                       "chat_id": self._history.chat_id}, "Reading mentions"))
+                                       "chat_id": history.chat_id}, "Reading mentions"))
 
     @Slot()
     def readAllReactions(self) -> None:
-        if self._history is not None:
+        history = self._history
+        if history is not None and self.topicId:
+            self._spawn(self._request({"@type": "readAllForumTopicReactions",
+                                       "chat_id": history.chat_id,
+                                       "forum_topic_id": history.topic_id}, "Reading reactions"))
+        elif history is not None:
             self._spawn(self._request({"@type": "readAllChatReactions",
-                                       "chat_id": self._history.chat_id}, "Reading reactions"))
+                                       "chat_id": history.chat_id}, "Reading reactions"))
 
     async def _jump_to_unread(self, kind: str) -> None:
         history = self._history
@@ -667,7 +781,8 @@ class MessageListModel(QAbstractListModel):
             return
         try:
             found = await self._client.send({
-                "@type": "searchChatMessages", "chat_id": history.chat_id, "topic_id": None,
+                "@type": "searchChatMessages", "chat_id": history.chat_id,
+                "topic_id": topic_obj(max(history.topic_id, 0)),
                 "query": "", "sender_id": None, "from_message_id": 0, "offset": 0,
                 "limit": 100, "filter": {"@type": kind}})
         except TdError as e:
@@ -824,6 +939,9 @@ class MessageListModel(QAbstractListModel):
         row = history.row_of(message_id)
         if row >= 0:
             self.jumpReady.emit(row)
+            return
+        if self.isForum:
+            self._spawn(self._jump_in_forum(history, message_id))
             return
 
         async def load() -> None:
@@ -1392,9 +1510,38 @@ class MessageListModel(QAbstractListModel):
             self._row_changed(row)
         self.jumpToLatest()
 
-    def _last_message_id(self, chat_id: int) -> int:
+    def _last_message_id(self, chat_id: int, topic_id: int = 0) -> int:
+        if topic_id and self._forums is not None:
+            topic = self._forums.get(chat_id, topic_id)
+            return int(((topic.last_message if topic else None) or {}).get("id") or 0)
         chat = self._chats.chats.get(chat_id)
         return int(((chat.last_message if chat else None) or {}).get("id") or 0)
+
+    async def _jump_in_forum(self, history: ChatHistory, message_id: int) -> None:
+        """In a forum the message's topic is opened first (from the topic list, too)."""
+        try:
+            message = await self._client.send({"@type": "getMessage", "chat_id": history.chat_id,
+                                               "message_id": message_id})
+        except TdError as e:
+            log.info("Message %s to jump to is gone: %s", message_id, e)
+            return
+        if history is not self._history:
+            return
+        topic_id = message_topic_id(message)
+        if topic_id != history.topic_id:
+            self.openTopic(topic_id)
+        history = self._history
+        if history is None:
+            return
+        found = await history.load_around(message_id)
+        if found and history is self._history:
+            self._sync_latest()
+            self.jumpReady.emit(history.row_of(message_id))
+
+    def _topic_for(self, chat_id: int) -> dict[str, Any] | None:
+        """The open topic, if a message goes to the chat that is open."""
+        history = self._history
+        return self.topic_obj() if history is not None and history.chat_id == chat_id else None
 
     def _sync_latest(self) -> None:
         latest = self._history.reached_end if self._history else True
@@ -1562,7 +1709,8 @@ class MessageListModel(QAbstractListModel):
 
     async def _send_content(self, chat_id: int, content: dict[str, Any], reply_to: int) -> None:
         request: dict[str, Any] = {
-            "@type": "sendMessage", "chat_id": chat_id, "input_message_content": content}
+            "@type": "sendMessage", "chat_id": chat_id, "input_message_content": content,
+            "topic_id": self._topic_for(chat_id)}
         if reply_to:
             request["reply_to"] = {"@type": "inputMessageReplyToMessage", "message_id": reply_to}
         try:
@@ -1717,6 +1865,7 @@ class MessageListModel(QAbstractListModel):
         request: dict[str, Any] = {
             "@type": "sendMessage",
             "chat_id": chat_id,
+            "topic_id": self._topic_for(chat_id),
             "input_message_content": {"@type": "inputMessageText", "text": formatted,
                                       "link_preview_options": preview_options,
                                       "clear_draft": True},

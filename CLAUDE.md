@@ -46,11 +46,14 @@ src/tgclient/
   store/notifications.py  Notifier: TDLib notification groups → Notice → NotificationSink
   store/album.py     раскладка альбома сеткой (ряды, общая высота в ряду)
   store/custom_emoji.py  кастомные эмодзи: id → стикер (пакетный getCustomEmojiStickers) → файл
+  store/link_preview.py  linkPreview → карточка (сайт, заголовок, описание, картинка)
+  store/pinned.py    закреплённые сообщения открытого чата/темы для полосы под шапкой
+  store/forums.py    форумы: супергруппы с темами, список тем и их счётчики
   models/    Qt-модели для QML: chat_list.py (сортированный список с move-анимацией), folders.py,
              messages.py (лента открытого чата, отправка, прочтение, действия над сообщениями,
              статус в шапке), composer.py (черновики, вложения, вставка из буфера, свой typing),
              chat_picker.py (выбор чата для пересылки), viewer.py (полноэкранный просмотрщик),
-             search.py (результаты поиска: секции, debounce, сниппеты)
+             search.py (результаты поиска: секции, debounce, сниппеты), topics.py (темы форума)
   ui/        QObject-контроллеры (auth_controller, shell, voice_player, ai_controller,
              notifications: системные уведомления + бейдж, accounts: мультиаккаунт,
              recorder: запись голосовых, updates: автообновление), animation.py (TGS/WebM:
@@ -369,6 +372,16 @@ src/tgclient/
   (id по возрастанию — порядок для `forwardMessages`).
 - Взаимодействие: двойной клик по пузырю — ответить; правый клик — меню (Reply, Copy text);
   Enter — отправить, Shift+Enter — перенос; клик по цитате — прыжок к сообщению (если загружено).
+- Форумы (`is_forum` из `updateSupergroup` → `ForumStore`): чат открывается списком тем
+  (`messages.topicsMode`, `ChatHistory.topic_id = TOPIC_LIST` ничего не грузит, `TopicList.qml`
+  из `TopicListModel`); `openTopic(id)` — история темы (`getForumTopicHistory`, живые
+  сообщения фильтруются по `message.topic_id`), `closeTopic()` — назад. Всё, что уходит в
+  чат из открытой темы, несёт `topic_id: messageTopicForum` (`sendMessage`, черновик, typing,
+  поиск упоминаний и закрепов); счётчики «вниз»/«@» — темы. `jumpTo` в форуме сначала
+  спрашивает сообщение (`getMessage`) и открывает его тему. Unread темы приходит без числа
+  (`updateForumTopic`) — `ForumStore` переспрашивает `getForumTopic`. Саммари в теме —
+  subject `topic:<id>` (`AiController.topicId` из QML, `summary.collect(topic_id=)`), шапка
+  промпта «Чат › Тема».
 - Закрепы: `store/pinned.py` (`PinnedMessages`, Qt-free) грузит все закреплённые
   (`searchChatMessages` с `searchMessagesFilterPinned`, запасной — `getChatPinnedMessage`) и
   обновляется по `updateMessageIsPinned`/удалениям. Полоса под шапкой показывает одно; клик —

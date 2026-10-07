@@ -458,11 +458,15 @@ class AiService:
     def summary(self, chat_id: int, subject: str = "") -> SummaryState:
         return self._summaries.get((chat_id, subject)) or SummaryState("")
 
-    def summarize(self, chat_id: int, scope: str) -> None:
-        """Summary of the chat's recent messages (unread | day | week)."""
+    def summarize(self, chat_id: int, scope: str, topic_id: int = 0, topic_name: str = "",
+                  last_read: int = 0) -> None:
+        """Summary of the chat's recent messages (unread | day | week). In a forum topic
+        (subject "topic:<id>"), only that topic; `last_read` is its read mark."""
         if scope not in summaries.SCOPES:
             raise ValueError(f"Unknown summary scope: {scope}")
-        self._start((chat_id, ""), scope, "", lambda: self._run_summary(chat_id, scope))
+        subject = f"topic:{topic_id}" if topic_id else ""
+        self._start((chat_id, subject), scope, topic_name,
+                    lambda: self._run_summary(chat_id, scope, topic_id, topic_name, last_read))
 
     def summarize_person(self, chat_id: int, sender: str, name: str) -> None:
         """Profile of one participant, built from their own messages in this chat."""
@@ -550,10 +554,13 @@ class AiService:
         self._store.summaries[key] = stored
         await asyncio.to_thread(self._store.save_summary, key, stored)
 
-    async def _run_summary(self, chat_id: int, scope: str) -> _Result:
+    async def _run_summary(self, chat_id: int, scope: str, topic_id: int = 0,
+                           topic_name: str = "", last_read: int = 0) -> _Result:
         chat = self._chats.chats[chat_id]
-        outside = summaries.stop_condition(scope, chat.last_read_inbox_message_id)
-        messages, truncated = await summaries.collect(self._client, chat_id, outside)
+        outside = summaries.stop_condition(
+            scope, last_read if topic_id else chat.last_read_inbox_message_id)
+        messages, truncated = await summaries.collect(self._client, chat_id, outside,
+                                                      topic_id=topic_id)
         text, source = summaries.render(messages, self._sender_name, self._transcript_of(chat_id),
                                         reader=await self._marks_for(chat_id, messages))
         if not source.count:
@@ -562,7 +569,8 @@ class AiService:
         self._check(chat_id)
         reply = await self._complete(
             chat_id, "summary", self.summary_model,
-            summaries.prompt(chat.title, self._reader(with_username=True), text,
+            summaries.prompt(f"{chat.title} › {topic_name}" if topic_name else chat.title,
+                             self._reader(with_username=True), text,
                              self.translate_to, _PERIODS[scope], source.for_you))
         text = summaries.keep_for_you(reply.text, assist.word(self.translate_to, "for_you"),
                                       source.for_you)

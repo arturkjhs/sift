@@ -24,6 +24,7 @@ from .models.folders import FolderModel
 from .models.messages import MessageListModel
 from .models.search import SearchModel
 from .models.stickers import StickerModel
+from .models.topics import TopicListModel
 from .models.viewer import ViewerModel
 from .prefs import Prefs
 from .services.ai import AiService
@@ -37,6 +38,7 @@ from .store.chats import MAIN, ChatStore
 from .store.custom_emoji import CustomEmojiStore
 from .store.emoji import EmojiCatalog
 from .store.files import FileManager
+from .store.forums import ForumStore
 from .store.presence import PresenceStore
 from .store.stickers import StickerStore
 from .store.users import UserStore
@@ -93,6 +95,7 @@ class Session:
         self.chats = ChatStore(self.client, self.files)
         self.users = UserStore(self.client, self.files)
         self.presence = PresenceStore(self.client)
+        self.forums = ForumStore(self.client)
         self.prefs = prefs or Prefs(settings.data_dir / "prefs.json")
         self.auth = AuthController()
         self.auth_flow = AuthFlow(
@@ -124,9 +127,12 @@ class Session:
             read_languages=tuple(self.prefs.get("read_languages") or ()),
         )
         self.ai = AiController(self.ai_service, self.chats, prefs=self.prefs)
+        self.ai.topic_info = self._topic_info
         self.custom_emoji = CustomEmojiStore(self.client, self.files)
         self.messages = MessageListModel(self.client, self.chats, self.users, self.ai_service,
-                                         self.presence, emoji=self.custom_emoji)
+                                         self.presence, emoji=self.custom_emoji,
+                                         forums=self.forums)
+        self.topics = TopicListModel(self.forums, self.chats, self.users, self.messages)
         self.viewer = ViewerModel(self.messages, self.files)
         self.recorder = VoiceRecorder(self.client, self.messages, settings.data_dir / "voice")
         self.composer = ComposerModel(self.client, self.chats, self.messages,
@@ -153,6 +159,10 @@ class Session:
         self.stickers = StickerModel(self.sticker_store, self.files)
         self.emojis = EmojiModel(EmojiCatalog(settings.data_dir / "recent-emoji.json"))
         self.voice = VoicePlayer(self.client, self.files)
+
+    def _topic_info(self, chat_id: int, topic_id: int) -> tuple[str, int]:
+        topic = self.forums.get(chat_id, topic_id)
+        return (topic.name, topic.last_read_inbox_message_id) if topic else ("", 0)
 
     async def start(self) -> None:
         try:
@@ -299,6 +309,7 @@ def bind_session(engine: QQmlApplicationEngine, images: TdImageProvider,
     context.setContextProperty("chatList", session.chat_list)
     context.setContextProperty("folders", session.folders)
     context.setContextProperty("messages", session.messages)
+    context.setContextProperty("topics", session.topics)
     context.setContextProperty("voice", session.voice)
     context.setContextProperty("ai", session.ai)
     context.setContextProperty("search", session.search)

@@ -144,16 +144,21 @@ def stop_condition(scope: str, last_read_inbox_id: int,
 
 
 async def collect(client: TdClient, chat_id: int, outside: Callable[[Message], bool],
-                  limit: int = MAX_MESSAGES) -> tuple[list[Message], bool]:
-    """Newest-to-oldest paging until `outside` matches. Returns (oldest first, truncated)."""
+                  limit: int = MAX_MESSAGES, topic_id: int = 0) -> tuple[list[Message], bool]:
+    """Newest-to-oldest paging until `outside` matches. Returns (oldest first, truncated).
+    `topic_id`: only that forum topic."""
     found: list[Message] = []
     from_id = 0
     while len(found) < limit:
+        request: dict[str, Any] = {
+            "@type": "getChatHistory", "chat_id": chat_id, "from_message_id": from_id,
+            "offset": 0, "limit": PAGE, "only_local": False}
+        if topic_id:
+            request = {"@type": "getForumTopicHistory", "chat_id": chat_id,
+                       "forum_topic_id": topic_id, "from_message_id": from_id, "offset": 0,
+                       "limit": PAGE}
         try:
-            page = await client.send({
-                "@type": "getChatHistory", "chat_id": chat_id, "from_message_id": from_id,
-                "offset": 0, "limit": PAGE, "only_local": False,
-            })
+            page = await client.send(request)
         except TdError as e:
             log.warning("getChatHistory for summary failed: %s", e)
             break

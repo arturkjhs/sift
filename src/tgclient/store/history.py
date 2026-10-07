@@ -21,6 +21,7 @@ from collections.abc import Callable
 from typing import Any, Protocol
 
 from ..td.client import Event, TdClient, TdError
+from .forums import message_topic_id
 
 log = logging.getLogger(__name__)
 
@@ -56,12 +57,14 @@ class ChatHistory:
 
     def __init__(
         self, client: TdClient, chat_id: int, listener: HistoryListener | None = None,
-        last_message_id: Callable[[], int] | None = None,
+        last_message_id: Callable[[], int] | None = None, topic_id: int = 0,
     ) -> None:
         """`last_message_id`: the chat's newest message (ChatStore), to know when a window
-        loaded around an old message has reached it; without it, a short page means so."""
+        loaded around an old message has reached it; without it, a short page means so.
+        `topic_id`: only this forum topic (getForumTopicHistory, live messages filtered)."""
         self._client = client
         self.chat_id = chat_id
+        self.topic_id = topic_id
         self._last_message_id = last_message_id or (lambda: 0)
         self.messages: list[Message] = []
         self._keys: list[int] = []  # -message_id, ascending == newest first
@@ -123,7 +126,7 @@ class ChatHistory:
 
     def add(self, message: Message) -> None:
         """Insert or replace a message (e.g. the result of sendMessage)."""
-        if message.get("chat_id", self.chat_id) == self.chat_id:
+        if self._mine({"chat_id": self.chat_id, **message}):
             self._insert(message)
 
     # --- loading ----------------------------------------------------------------------------
@@ -256,11 +259,15 @@ class ChatHistory:
     async def _fetch(self, from_id: int, offset: int = 0, limit: int = 0,
                      keep_from: bool = False) -> list[Message]:
         """A page of history from `from_id` (older; with a negative offset also newer)."""
+        request: dict[str, Any] = {
+            "@type": "getChatHistory", "chat_id": self.chat_id, "from_message_id": from_id,
+            "offset": offset, "limit": limit or self.PAGE, "only_local": False}
+        if self.topic_id:
+            request = {"@type": "getForumTopicHistory", "chat_id": self.chat_id,
+                       "forum_topic_id": self.topic_id, "from_message_id": from_id,
+                       "offset": offset, "limit": limit or self.PAGE}
         try:
-            result = await self._client.send({
-                "@type": "getChatHistory", "chat_id": self.chat_id, "from_message_id": from_id,
-                "offset": offset, "limit": limit or self.PAGE, "only_local": False,
-            })
+            result = await self._client.send(request)
         except TdError as e:
             log.warning("getChatHistory(%s, %s) failed: %s", self.chat_id, from_id, e)
             return []
@@ -347,14 +354,18 @@ class ChatHistory:
         return not self.reached_end and bool(self.messages) and (
             message["id"] > self.messages[0]["id"])
 
+    def _mine(self, message: Message) -> bool:
+        return message.get("chat_id") == self.chat_id and (
+            not self.topic_id or message_topic_id(message) == self.topic_id)
+
     def _on_new_message(self, event: Event) -> None:
         message = event["message"]
-        if message.get("chat_id") == self.chat_id and not self._past_window(message):
+        if self._mine(message) and not self._past_window(message):
             self._insert(message)
 
     def _on_send_result(self, event: Event) -> None:
         message = event["message"]
-        if message.get("chat_id") != self.chat_id:
+        if not self._mine(message):
             return
         self._remove(event["old_message_id"])
         if not self._past_window(message):

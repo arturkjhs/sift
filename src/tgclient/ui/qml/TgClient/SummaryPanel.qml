@@ -20,7 +20,7 @@ Rectangle {
     readonly property bool hasOptions: kind === "reply" && ai.replyOptions.length > 0
     readonly property bool light: kind === "explain" && ai.explainKind === "light"
     property bool analysisShown: false
-    readonly property string kind: ai.subject === "" ? "summary"
+    readonly property string kind: ai.subject === "" || ai.subject.startsWith("topic:") ? "summary"
                                    : ai.subject.startsWith("user:") || ai.subject.startsWith("chat:")
                                      ? "person"
                                    : ai.subject.split(":")[0]   // ask | events | answers | doc

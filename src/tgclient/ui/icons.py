@@ -32,6 +32,7 @@ ICONS: dict[str, str] = {
                 '<circle cx="17" cy="17" r="2"/>',
     "refresh": '<path d="M19.5 12a7.5 7.5 0 1 1-2.2-5.3M19.5 4v4.5H15"/>',
     "chevron-down": '<path d="M6.5 9.5 12 15l5.5-5.5"/>',
+    "back": '<path d="M14.5 6 8.5 12l6 6"/>',
     "arrow-down": '<path d="M12 4.5v15M6 13.5l6 6 6-6"/>',
     "summary": '<path d="M5 5.5h14M5 10h14M5 14.5h8"/><path d="M16.5 14.5l1 2.5 2.5 1-2.5 1'
                '-1 2.5-1-2.5-2.5-1 2.5-1z"/>',

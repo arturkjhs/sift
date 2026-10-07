@@ -73,6 +73,9 @@ class AiController(QObject):
         self._prefs = prefs or Prefs(None)
         self._chat_id = 0
         self._subject = ""  # what the summary panel shows: "" = the chat, "user:<id>" = a person
+        self._topic_id = 0  # open forum topic
+        # (chat id, topic id) -> (topic name, last read message id); set by the app
+        self.topic_info: Callable[[int, int], tuple[str, int]] = lambda chat, topic: ("", 0)
         self._global = "digest"  # what the digest window shows: digest | promises
         self._assist_busy = False
         self._assist_error = ""
@@ -256,6 +259,23 @@ class AiController(QObject):
             self.summaryChanged.emit()
 
     chatId = Property("QVariant", _get_chat_id, _set_chat_id, notify=chatChanged)
+
+    def _get_topic_id(self) -> int:
+        return self._topic_id
+
+    def _set_topic_id(self, topic_id: Any) -> None:
+        topic_id = int(topic_id or 0)
+        if topic_id != self._topic_id:
+            self._topic_id = topic_id
+            if self._subject == "" or self._subject.startswith("topic:"):
+                self._subject = f"topic:{topic_id}" if topic_id else ""
+            self.summaryChanged.emit()
+
+    # The open forum topic (bound from QML): summaries cover only it.
+    topicId = Property("QVariant", _get_topic_id, _set_topic_id, notify=summaryChanged)
+
+    def _summary_subject(self) -> str:
+        return f"topic:{self._topic_id}" if self._topic_id else ""
 
     @Property(bool, notify=chatChanged)
     def available(self) -> bool:
@@ -551,8 +571,10 @@ class AiController(QObject):
     @Slot(str)
     def summarize(self, scope: str) -> None:
         if self._chat_id:
-            self._show("")
-            self._service.summarize(self._chat_id, scope)
+            self._show(self._summary_subject())
+            name, last_read = (self.topic_info(self._chat_id, self._topic_id)
+                               if self._topic_id else ("", 0))
+            self._service.summarize(self._chat_id, scope, self._topic_id, name, last_read)
 
     @Slot(str, str)
     def summarizePerson(self, sender: str, name: str) -> None:
@@ -575,6 +597,9 @@ class AiController(QObject):
             self.suggestReplies(int(subject.split(":", 1)[1]), summary.name)
         elif subject.startswith("answers:"):
             self.collectAnswers(int(subject.split(":", 1)[1]), summary.name)
+        elif subject.startswith("topic:"):
+            if summary.scope:
+                self.summarize(summary.scope)
         elif subject:
             self.summarizePerson(subject, summary.name)
         elif summary.scope:
@@ -582,7 +607,7 @@ class AiController(QObject):
 
     @Slot()
     def showChatSummary(self) -> None:
-        self._show("")
+        self._show(self._summary_subject())
 
     @Property(str, notify=summaryChanged)
     def subject(self) -> str:

@@ -21,9 +21,12 @@ MAX_PINNED = 100
 
 
 class PinnedMessages:
-    def __init__(self, client: TdClient, chat_id: int, on_change: Callable[[], None]) -> None:
+    def __init__(self, client: TdClient, chat_id: int, on_change: Callable[[], None],
+                 topic: dict[str, Any] | None = None) -> None:
+        """`topic`: a forum topic (MessageTopic): only its pinned messages."""
         self._client = client
         self.chat_id = chat_id
+        self._topic = topic
         self._on_change = on_change
         self.messages: list[Message] = []  # newest first
         self.index = 0  # the one the bar shows
@@ -65,7 +68,7 @@ class PinnedMessages:
     async def load(self) -> None:
         try:
             found = await self._client.send({
-                "@type": "searchChatMessages", "chat_id": self.chat_id, "topic_id": None,
+                "@type": "searchChatMessages", "chat_id": self.chat_id, "topic_id": self._topic,
                 "query": "", "sender_id": None, "from_message_id": 0, "offset": 0,
                 "limit": MAX_PINNED, "filter": {"@type": "searchMessagesFilterPinned"}})
             messages = [m for m in found.get("messages") or [] if m]

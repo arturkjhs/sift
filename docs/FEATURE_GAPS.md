@@ -98,10 +98,11 @@
   клик — прыжок к сообщению; при нескольких закрепах — переключение по кругу.
   → `store/pinned.py` (`searchMessagesFilterPinned`, `updateMessageIsPinned`), полоса `pinnedBar`, Pin/Unpin в меню сообщения (`pinDialog`), «Unpin all»; заодно «Copy link» (`getMessageLink`).
 
-- [ ] **Темы (форумы) в супергруппах.** Для `is_forum`: список тем (`getForumTopics`),
+- [x] **Темы (форумы) в супергруппах.** Для `is_forum`: список тем (`getForumTopics`),
   история темы (`getMessageThreadHistory` или аналог), отправка в тему, непрочитанное
   по темам. Без этого крупные комьюнити-чаты с темами читаются как каша.
   AI-саммари — по теме, а не по всему чату.
+  → `store/forums.py`, `models/topics.py` + `TopicList.qml`, `ChatHistory(topic_id=)`, отправка/черновики/typing с `topic_id`, саммари темы (`topic:<id>`).
 
 - [ ] **Поиск внутри открытого чата.** Cmd/Ctrl+F в чате (сайдбар-поиск остаётся по всему):
   `searchChatMessages`, стрелки вверх/вниз, подсветка, прыжок через существующий `jumpTo`.

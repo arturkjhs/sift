@@ -52,6 +52,7 @@ class ComposerModel(QObject):
         self._messages = messages
         self._paste_dir = paste_dir
         self._chat_id = 0
+        self._topic: dict[str, Any] | None = None  # forum topic of the input, if any
         self._text = ""
         self._reply_to = 0
         self._synced: tuple[str, int] = ("", 0)  # what TDLib has for the current chat
@@ -73,14 +74,12 @@ class ComposerModel(QObject):
 
     @Property(str, notify=remoteDraft)
     def draftText(self) -> str:
-        """Saved draft of the open chat: QML puts it into the input when a chat opens."""
-        chat = self._chats.chats.get(int(self._messages.chatId or 0))
-        return draft_text(chat.draft) if chat else ""
+        """Saved draft of the open chat (or forum topic): QML puts it into the input."""
+        return draft_text(self._messages.current_draft())
 
     @Property("QVariant", notify=remoteDraft)
     def draftReplyTo(self) -> int:
-        chat = self._chats.chats.get(int(self._messages.chatId or 0))
-        return draft_reply_to(chat.draft) if chat else 0
+        return draft_reply_to(self._messages.current_draft())
 
     @Slot(str, "QVariant")
     def setDraft(self, text: str, reply_to: Any = 0) -> None:
@@ -119,20 +118,21 @@ class ComposerModel(QObject):
 
     def _on_chat_changed(self) -> None:
         chat_id = int(self._messages.chatId or 0)
-        if chat_id == self._chat_id:
+        topic = self._messages.topic_obj()
+        if (chat_id, topic) == (self._chat_id, self._topic):
             return
         self.flush()
-        self._chat_id = chat_id
+        self._chat_id, self._topic = chat_id, topic
         self._last_typing = 0.0
-        chat = self._chats.chats.get(chat_id)
-        self._text = draft_text(chat.draft) if chat else ""
-        self._reply_to = draft_reply_to(chat.draft) if chat else 0
+        draft = self._messages.current_draft()
+        self._text = draft_text(draft)
+        self._reply_to = draft_reply_to(draft)
         self._synced = (self._text.strip(), self._reply_to)
         self.clearStaged()
         self._reset_preview()
 
     def _on_chats(self, kind: str, payload: Any) -> None:
-        if kind != "chat" or payload != self._chat_id or not self._chat_id:
+        if kind != "chat" or payload != self._chat_id or not self._chat_id or self._topic:
             return
         chat = self._chats.chats[self._chat_id]
         remote = (draft_text(chat.draft), draft_reply_to(chat.draft))
@@ -166,7 +166,8 @@ class ComposerModel(QObject):
             self._synced = (text.strip(), reply_to if draft else 0)
         try:
             await self._client.send({"@type": "setChatDraftMessage", "chat_id": chat_id,
-                                     "topic_id": None, "draft_message": draft})
+                                     "topic_id": self._topic if chat_id == self._chat_id
+                                     else None, "draft_message": draft})
         except TdError as e:
             log.warning("Saving the draft failed: %s", e)
 
@@ -181,7 +182,7 @@ class ComposerModel(QObject):
             return
         self._last_typing = now
         self._spawn(self._request({
-            "@type": "sendChatAction", "chat_id": self._chat_id, "topic_id": None,
+            "@type": "sendChatAction", "chat_id": self._chat_id, "topic_id": self._topic,
             "business_connection_id": "", "action": {"@type": "chatActionTyping"}}))
 
     # --- link preview -----------------------------------------------------------------------
