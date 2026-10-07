@@ -151,6 +151,16 @@ def responder(req: dict[str, Any]) -> list[dict[str, Any]]:
                           reply_to=1)]
             return [{"@type": "foundChatMessages", "total_count": 1, "next_from_message_id": 0,
                      "messages": found, "@extra": req["@extra"]}]
+        case "getSavedAnimations":
+            import test_gifs
+
+            found = []
+            for i in range(5):
+                gif = test_gifs.animation(700 + 2 * i)
+                gif["thumbnail"]["file"]["local"] = {"path": PHOTO_PATH,
+                                                     "is_downloading_completed": True}
+                found.append(gif)
+            return [{"@type": "animations", "animations": found, "@extra": req["@extra"]}]
         case "getActiveSessions":
             import test_devices
 
@@ -426,6 +436,12 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         session.stickers.setProperty("currentSet", "77")
         await wait_until(lambda: (pump(), session.stickers.rowCount())[1] == 4)
         await settle()
+        picker.setProperty("tab", "gifs")
+        session.gifs.load()
+        await wait_until(lambda: (pump(), session.gifs.rowCount())[1] == 5)
+        await settle()
+        _screenshot(window, "picker-gifs")
+        picker.setProperty("tab", "stickers")
         sticker = session.stickers.sticker(0)
         QMetaObject.invokeMethod(picker, "stickerPicked", Q_ARG("QVariant", sticker))
         await wait_until(lambda: (pump(), session.messages.rowCount())[1] == 7)

@@ -596,6 +596,11 @@ Rectangle {
                         picker.close()
                         root.sent()
                     }
+                    onGifPicked: animation => {
+                        messages.sendAnimation(animation, root.replyToId)
+                        picker.close()
+                        root.sent()
+                    }
                     onClosed: input.forceActiveFocus()
                 }
             }

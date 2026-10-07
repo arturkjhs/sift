@@ -169,6 +169,11 @@ src/tgclient/
   открыть» — только после события `loaded` (наборы и недавние приходят в любом порядке).
   Отправка: `inputMessageSticker{sticker: inputSticker{sticker, thumbnail, width, height}, emoji}`
   (на нашем коммите TDLib файл обёрнут в `inputSticker`, как и у фото).
+- GIF: вкладка «GIFs» в `EmojiStickerPicker` (`GifModel` = `gifs`): сохранённые
+  (`getSavedAnimations`) или поиск инлайн-ботом @gif (`searchPublicChat` → `getInlineQueryResults`,
+  через 0.35 с после ввода); превью — статичные миниатюры. Отправка —
+  `messages.sendAnimation` (`inputMessageAnimation` с `inputFileId`, без загрузки) +
+  `addSavedAnimation`.
 - Голосовые: один `VoicePlayer` (QtMultimedia, FFmpeg-бэкенд, Ogg/Opus проверен) на всё
   приложение; при старте воспроизведения шлёт `openMessageContent` (отметка «прослушано»).
   Запись — `VoiceRecorder`: PCM 48 кГц mono через `QAudioSource`, кодирование в Ogg/Opus PyAV

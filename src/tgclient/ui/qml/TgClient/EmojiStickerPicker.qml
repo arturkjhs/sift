@@ -13,6 +13,7 @@ Popup {
 
     signal emojiPicked(string emoji)
     signal stickerPicked(var sticker)
+    signal gifPicked(var animation)
 
     width: 372
     height: 430
@@ -132,13 +133,23 @@ Popup {
                 filled: root.tab === "stickers"
                 onClicked: root.tab = "stickers"
             }
+            PillButton {
+                objectName: "gifsTab"
+                text: qsTr("GIFs")
+                filled: root.tab === "gifs"
+                onClicked: {
+                    root.tab = "gifs"
+                    gifs.load()
+                    gifSearch.focusInput()
+                }
+            }
             Item { Layout.fillWidth: true }
         }
 
         StackLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
-            currentIndex: root.tab === "emoji" ? 0 : 1
+            currentIndex: root.tab === "emoji" ? 0 : root.tab === "stickers" ? 1 : 2
 
             // --- emoji ------------------------------------------------------------------------
             ColumnLayout {
@@ -339,6 +350,72 @@ Popup {
                               : setBar.count === 0
                                 ? qsTr("No sticker sets yet. Add some in Telegram on your phone.")
                                 : qsTr("No stickers here")
+                        color: Theme.textMuted
+                        font.pixelSize: Theme.fontBody
+                    }
+                }
+            }
+
+            // --- GIFs: saved ones, or found by the @gif bot ------------------------------------
+            ColumnLayout {
+                spacing: 6
+
+                SearchBox {
+                    id: gifSearch
+                    objectName: "gifSearch"
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 10
+                    Layout.rightMargin: 10
+                    placeholder: qsTr("Search GIFs")
+                    onEdited: text => gifs.query = text
+                    onCleared: gifs.query = ""
+                }
+
+                GridView {
+                    id: gifGrid
+                    objectName: "gifGrid"
+                    Layout.fillWidth: true
+                    Layout.fillHeight: true
+                    Layout.leftMargin: 6
+                    Layout.rightMargin: 6
+                    Layout.bottomMargin: 6
+                    clip: true
+                    boundsBehavior: Flickable.StopAtBounds
+                    cellWidth: Math.floor(width / 3)
+                    cellHeight: Math.floor(cellWidth * 0.75)
+                    model: gifs
+                    ScrollBar.vertical: ScrollBar {}
+
+                    delegate: AbstractButton {
+                        id: gifCell
+                        required property int index
+                        required property string source
+                        width: gifGrid.cellWidth
+                        height: gifGrid.cellHeight
+                        hoverEnabled: true
+                        padding: 2
+                        background: Rectangle {
+                            radius: 6
+                            color: gifCell.hovered ? Theme.hover : Theme.pill
+                        }
+                        contentItem: Image {
+                            source: gifCell.source
+                            fillMode: Image.PreserveAspectCrop
+                            asynchronous: true
+                            clip: true
+                        }
+                        onClicked: root.gifPicked(gifs.animation(index))
+                    }
+
+                    Text {
+                        anchors.centerIn: parent
+                        width: parent.width - 40
+                        visible: gifGrid.count === 0
+                        horizontalAlignment: Text.AlignHCenter
+                        wrapMode: Text.Wrap
+                        text: gifs.loading ? qsTr("Searching\u2026")
+                              : gifs.query !== "" ? qsTr("No GIFs found")
+                              : qsTr("GIFs you send will appear here. Search to find more.")
                         color: Theme.textMuted
                         font.pixelSize: Theme.fontBody
                     }

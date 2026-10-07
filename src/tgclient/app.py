@@ -22,6 +22,7 @@ from .models.chat_picker import ChatPickerModel
 from .models.composer import ComposerModel
 from .models.emoji import EmojiModel
 from .models.folders import FolderModel
+from .models.gifs import GifModel
 from .models.messages import MessageListModel
 from .models.profile import ProfileModel
 from .models.search import SearchModel
@@ -183,6 +184,7 @@ class Session:
             query, chat_id, limit=30)
         self.sticker_store = StickerStore(self.client, self.files)
         self.stickers = StickerModel(self.sticker_store, self.files)
+        self.gifs = GifModel(self.client, self.files)
         self.emojis = EmojiModel(EmojiCatalog(settings.data_dir / "recent-emoji.json"))
         self.voice = VoicePlayer(self.client, self.files)
 
@@ -414,6 +416,7 @@ def bind_session(engine: QQmlApplicationEngine, images: TdImageProvider,
     context.setContextProperty("search", session.search)
     context.setContextProperty("emojis", session.emojis)
     context.setContextProperty("stickers", session.stickers)
+    context.setContextProperty("gifs", session.gifs)
     context.setContextProperty("composerModel", session.composer)
     context.setContextProperty("chatPicker", session.chat_picker)
     context.setContextProperty("notifications", session.notifications)

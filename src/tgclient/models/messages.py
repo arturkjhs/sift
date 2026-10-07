@@ -1410,6 +1410,28 @@ class MessageListModel(QAbstractListModel):
         }
         self._spawn(self._send_content(history.chat_id, content, int(reply_to or 0)))
 
+    @Slot("QVariantMap", "QVariant")
+    def sendAnimation(self, animation: dict[str, Any], reply_to: Any = 0) -> None:
+        """A GIF from the picker (saved or found): sent by its file, no upload."""
+        history = self._history
+        file = (animation or {}).get("animation") or {}
+        if history is None or not file.get("id"):
+            return
+        self._clear_unread_separator()
+        content = {
+            "@type": "inputMessageAnimation",
+            "animation": {"@type": "inputAnimation",
+                          "animation": {"@type": "inputFileId", "id": file["id"]},
+                          "thumbnail": None, "added_sticker_file_ids": [],
+                          "duration": animation.get("duration", 0),
+                          "width": animation.get("width", 0),
+                          "height": animation.get("height", 0)},
+            "caption": None, "show_caption_above_media": False, "has_spoiler": False,
+        }
+        self._spawn(self._send_content(history.chat_id, content, int(reply_to or 0)))
+        self._spawn(self._request({"@type": "addSavedAnimation", "animation": {
+            "@type": "inputFileId", "id": file["id"]}}, "Saving the GIF"))
+
     def send_voice_to(self, chat_id: int, path: str, duration: int, waveform: bytes,
                       reply_to: int = 0) -> None:
         """A recorded voice message (Ogg/Opus). The chat is the one it was recorded in, which
