@@ -290,6 +290,50 @@ class ReactorsTest(ActionCase):
         self.assertEqual(self.model.reactorsText(4, "🔥"), "")
 
 
+class PinnedTest(ActionCase):
+    async def test_bar_cycles_and_follows_updates(self) -> None:
+        pinned = {2, 5}
+
+        def answer(req: dict[str, Any]) -> list[dict[str, Any]] | None:
+            if req["@type"] == "searchChatMessages":
+                assert req["filter"] == {"@type": "searchMessagesFilterPinned"}
+                found = [msg(i, is_pinned=True) for i in sorted(pinned, reverse=True)]
+                return [{"@type": "foundChatMessages", "total_count": len(found),
+                         "next_from_message_id": 0, "messages": found, "@extra": req["@extra"]}]
+            if req["@type"] == "getMessageLink":
+                return [{"@type": "messageLink", "link": "https://t.me/c/1/4",
+                         "is_public": False, "@extra": req["@extra"]}]
+            return None
+
+        self.server.hook = answer
+        await self.open_loaded()
+        await wait_until(lambda: self.model.pinnedCount == 2)
+        self.assertEqual((self.model.pinnedIndex, self.model.pinnedText), (1, "m5"))
+        self.assertEqual(self.model.nextPinned(), 5)  # jump to the shown one, show the older
+        self.assertEqual((self.model.pinnedIndex, self.model.pinnedId), (2, 2))
+        self.assertEqual(self.model.nextPinned(), 2)
+        self.assertEqual(self.model.pinnedIndex, 1)  # round and round
+
+        self.model.pinMessage(4, False)
+        await wait_until(lambda: bool(self.sent("pinChatMessage")))
+        self.assertTrue(self.sent("pinChatMessage")[0]["disable_notification"])
+        pinned.add(4)
+        await self.push({"@type": "updateMessageIsPinned", "chat_id": CHAT, "message_id": 4,
+                         "is_pinned": True})
+        await wait_until(lambda: self.model.pinnedCount == 3)
+        self.assertTrue(self.model._history.get(4)["is_pinned"])
+        await self.push({"@type": "updateDeleteMessages", "chat_id": CHAT, "message_ids": [5],
+                         "is_permanent": True, "from_cache": False})
+        self.assertEqual(self.model.pinnedCount, 2)
+
+        from PySide6.QtGui import QGuiApplication
+
+        self.model.copyLink(4)
+        await wait_until(lambda: QGuiApplication.clipboard().text() == "https://t.me/c/1/4")
+        self.model.close()
+        self.assertEqual(self.model.pinnedCount, 0)
+
+
 class PrivateStatusTest(ActionCase):
     async def test_private_chat_shows_last_seen(self) -> None:
         await self.push(new_chat(5, "Olena", 2, "chatTypePrivate"))
@@ -378,7 +422,8 @@ class FarUnreadTest(ActionCase):
         found: list[dict[str, Any]] = []
 
         def search(req: dict[str, Any]) -> list[dict[str, Any]] | None:
-            if req["@type"] == "searchChatMessages":
+            if req["@type"] == "searchChatMessages" and req["filter"]["@type"].endswith(
+                    "UnreadMention"):
                 found.append(req)
                 return [{"@type": "foundChatMessages", "total_count": 2, "next_from_message_id": 0,
                          "messages": [msg(400), msg(250)], "@extra": req["@extra"]}]

@@ -41,6 +41,7 @@ from ..store.format import (
 )
 from ..store.history import DELETED_REPLY, ChatHistory, Commit, Message
 from ..store.link_preview import message_link_preview
+from ..store.pinned import PinnedMessages
 from ..store.media import (
     Media,
     album_id,
@@ -201,6 +202,7 @@ class MessageListModel(QAbstractListModel):
     countersChanged = Signal()
     selectionChanged = Signal()
     reactorsChanged = Signal()
+    pinnedChanged = Signal()
 
     def __init__(
         self, client: TdClient, chats: ChatStore, users: UserStore,
@@ -220,6 +222,7 @@ class MessageListModel(QAbstractListModel):
         self._unread_after = 0  # last read incoming message id when the chat was opened
         self._first_unread = 0  # message showing the "Unread messages" separator
         self._at_latest = True
+        self._pinned: PinnedMessages | None = None
         self._selected: set[int] = set()
         self._reactors: dict[tuple[int, str], list[str]] = {}  # (message, key) -> names
         self._reactors_asked: set[tuple[int, str]] = set()
@@ -382,6 +385,73 @@ class MessageListModel(QAbstractListModel):
                     self.dataChanged.emit(index, index, [Role.Selected])
         self.selectionChanged.emit()
 
+    # --- pinned messages ----------------------------------------------------------------------
+
+    @Property(int, notify=pinnedChanged)
+    def pinnedCount(self) -> int:
+        return len(self._pinned.messages) if self._pinned else 0
+
+    @Property(int, notify=pinnedChanged)
+    def pinnedIndex(self) -> int:
+        """1 = the newest pinned message (shown as "Pinned message #2" for older ones)."""
+        return self._pinned.index + 1 if self._pinned and self._pinned.messages else 0
+
+    @Property(str, notify=pinnedChanged)
+    def pinnedText(self) -> str:
+        current = self._pinned.current if self._pinned else None
+        return self._short_text(current) if current else ""
+
+    @Property("QVariant", notify=pinnedChanged)
+    def pinnedId(self) -> int:
+        current = self._pinned.current if self._pinned else None
+        return current["id"] if current else 0
+
+    @Slot(result="QVariant")
+    def nextPinned(self) -> int:
+        """The bar was clicked: the message to show (QML jumps and flashes it); the bar moves
+        on to the next older pinned message."""
+        shown = self._pinned.advance() if self._pinned else None
+        return shown["id"] if shown else 0
+
+    @Slot("QVariant", bool)
+    def pinMessage(self, message_id: Any, notify: bool) -> None:
+        if self._history is not None and message_id:
+            self._spawn(self._request({
+                "@type": "pinChatMessage", "chat_id": self._history.chat_id,
+                "message_id": int(message_id), "disable_notification": not notify,
+                "only_for_self": False}, "Pinning"))
+
+    @Slot("QVariant")
+    def unpinMessage(self, message_id: Any) -> None:
+        if self._history is not None and message_id:
+            self._spawn(self._request({
+                "@type": "unpinChatMessage", "chat_id": self._history.chat_id,
+                "message_id": int(message_id)}, "Unpinning"))
+
+    @Slot()
+    def unpinAll(self) -> None:
+        if self._history is not None:
+            self._spawn(self._request({"@type": "unpinAllChatMessages",
+                                       "chat_id": self._history.chat_id}, "Unpinning all"))
+
+    @Slot("QVariant")
+    def copyLink(self, message_id: Any) -> None:
+        history = self._history
+        if history is not None and message_id:
+            self._spawn(self._copy_link(history.chat_id, int(message_id)))
+
+    async def _copy_link(self, chat_id: int, message_id: int) -> None:
+        message = self._history.get(message_id) if self._history else None
+        try:
+            link = await self._client.send({
+                "@type": "getMessageLink", "chat_id": chat_id, "message_id": message_id,
+                "media_timestamp": 0, "checklist_task_id": 0, "poll_option_id": "",
+                "for_album": bool(message and album_id(message)), "in_message_thread": False})
+        except TdError as e:
+            log.info("getMessageLink failed: %s", e)
+            return
+        QGuiApplication.clipboard().setText(link.get("link", ""))
+
     @Property(int, notify=reactorsChanged)
     def reactorsVersion(self) -> int:
         """Bumped when names for reactorsText() arrive (QML re-evaluates its tooltips)."""
@@ -515,8 +585,11 @@ class MessageListModel(QAbstractListModel):
         self.countersChanged.emit()
         self.selectionChanged.emit()
         self._sync_latest()
+        self._pinned = PinnedMessages(self._client, chat_id, self.pinnedChanged.emit)
+        self.pinnedChanged.emit()
         self._spawn(self._client.send({"@type": "openChat", "chat_id": chat_id}))
         self._spawn(self._run_load(history, self._load_initial(history)))
+        self._spawn(self._pinned.load())
 
     @Slot()
     def close(self) -> None:
@@ -524,6 +597,10 @@ class MessageListModel(QAbstractListModel):
             return
         history = self._history
         history.dispose()
+        if self._pinned is not None:
+            self._pinned.dispose()
+            self._pinned = None
+            self.pinnedChanged.emit()
         self.beginResetModel()
         self._history = None
         self._html_cache = {}
@@ -1530,6 +1607,9 @@ class MessageListModel(QAbstractListModel):
             "reactions": [] if is_service(content) else as_items(DEFAULT_REACTIONS[:QUICK]),
             "allReactions": [] if is_service(content) else as_items(DEFAULT_REACTIONS),
             "chosen": [r.key for r in message_reactions(message) if r.chosen],
+            "canPin": False,
+            "isPinned": bool(message.get("is_pinned")),
+            "canCopyLink": False,
         }
         ai = self._ai
         props, available, context = await asyncio.gather(
@@ -1550,6 +1630,8 @@ class MessageListModel(QAbstractListModel):
                 canDeleteForAll=bool(props.get("can_be_deleted_for_all_users")),
                 canForward=bool(props.get("can_be_forwarded")),
                 canReply=bool(props.get("can_be_replied", True)) and self.canWrite,
+                canPin=bool(props.get("can_be_pinned")),
+                canCopyLink=bool(props.get("can_get_link")),
             )
         if isinstance(available, dict):
             keys = available_keys(available)

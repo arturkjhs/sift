@@ -209,6 +209,87 @@ Item {
             color: Theme.separator
         }
 
+        // The pinned message (one of several: a click jumps to it and shows the next older).
+        Rectangle {
+            id: pinnedBar
+            objectName: "pinnedBar"
+            Layout.fillWidth: true
+            implicitHeight: visible ? 46 : 0
+            visible: messages.pinnedCount > 0
+            color: pinnedHover.hovered ? Theme.hover : Theme.sidebar
+
+            Column {  // one segment per pinned message (up to 4 shown), the current one lit
+                id: pinnedSegments
+                x: 16
+                anchors.verticalCenter: parent.verticalCenter
+                spacing: 2
+                readonly property int shown: Math.min(messages.pinnedCount, 4)
+                Repeater {
+                    model: pinnedSegments.shown
+                    Rectangle {
+                        required property int index
+                        width: 3
+                        height: (32 - (pinnedSegments.shown - 1) * 2) / pinnedSegments.shown
+                        radius: 1.5
+                        color: Theme.accent
+                        opacity: (messages.pinnedIndex - 1) % pinnedSegments.shown === index
+                                 ? 1 : 0.3
+                    }
+                }
+            }
+            Column {
+                anchors.left: pinnedSegments.right
+                anchors.leftMargin: 10
+                anchors.right: pinnedIcon.left
+                anchors.rightMargin: 8
+                anchors.verticalCenter: parent.verticalCenter
+                Text {
+                    text: messages.pinnedIndex > 1 ? qsTr("Pinned message #%1").arg(messages.pinnedIndex)
+                                                   : qsTr("Pinned message")
+                    color: Theme.accent
+                    font.pixelSize: Theme.fontSmall
+                    font.weight: Font.DemiBold
+                }
+                Text {
+                    width: parent.width
+                    text: messages.pinnedText
+                    textFormat: Text.PlainText
+                    elide: Text.ElideRight
+                    color: Theme.text
+                    font.pixelSize: Theme.fontBody
+                }
+            }
+            Icon {
+                id: pinnedIcon
+                anchors.right: parent.right
+                anchors.rightMargin: 16
+                anchors.verticalCenter: parent.verticalCenter
+                name: "pin"
+                size: 18
+            }
+            HoverHandler {
+                id: pinnedHover
+                cursorShape: Qt.PointingHandCursor
+            }
+            TapHandler {
+                onTapped: {
+                    const id = messages.nextPinned()
+                    if (id)
+                        root.showMessage(id)
+                }
+            }
+            TapHandler {
+                acceptedButtons: Qt.RightButton
+                onTapped: pinnedMenu.popup()
+            }
+            Rectangle {
+                anchors.bottom: parent.bottom
+                width: parent.width
+                height: 1
+                color: Theme.separator
+            }
+        }
+
         RowLayout {
             Layout.fillWidth: true
             Layout.fillHeight: true
@@ -852,6 +933,21 @@ Item {
             onTriggered: forwardDialog.pick(messageMenu.messageId)
         }
         AppMenuItem {
+            objectName: "pinItem"
+            text: messageMenu.actions.isPinned ? qsTr("Unpin") : qsTr("Pin")
+            iconName: "pin"
+            visible: messageMenu.actions.canPin === true
+            onTriggered: messageMenu.actions.isPinned
+                         ? messages.unpinMessage(messageMenu.messageId)
+                         : pinDialog.ask(messageMenu.messageId)
+        }
+        AppMenuItem {
+            text: qsTr("Copy link")
+            iconName: "link"
+            visible: messageMenu.actions.canCopyLink === true
+            onTriggered: messages.copyLink(messageMenu.messageId)
+        }
+        AppMenuItem {
             objectName: "selectItem"
             text: qsTr("Select")
             iconName: "check"
@@ -959,6 +1055,95 @@ Item {
             visible: messageMenu.actions.canDelete === true
             onTriggered: deleteDialog.ask(messageMenu.messageId,
                                           messageMenu.actions.canDeleteForAll === true)
+        }
+    }
+
+    AppMenu {
+        id: pinnedMenu
+        objectName: "pinnedMenu"
+        AppMenuItem {
+            text: qsTr("Go to message")
+            iconName: "open"
+            onTriggered: root.showMessage(messages.pinnedId)
+        }
+        AppMenuItem {
+            text: qsTr("Unpin")
+            iconName: "pin"
+            onTriggered: messages.unpinMessage(messages.pinnedId)
+        }
+        AppMenuItem {
+            visible: messages.pinnedCount > 1
+            text: qsTr("Unpin all messages")
+            iconName: "close"
+            danger: true
+            onTriggered: messages.unpinAll()
+        }
+    }
+
+    Popup {
+        id: pinDialog
+        objectName: "pinDialog"
+        property var messageId: 0
+
+        function ask(messageId) {
+            pinDialog.messageId = messageId
+            notifySwitch.checked = false
+            open()
+        }
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(380, root.width - 48)
+        modal: true
+        padding: 20
+        background: Rectangle {
+            radius: 12
+            color: Theme.sidebar
+            border.width: 1
+            border.color: Theme.separator
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 14
+            Text {
+                Layout.fillWidth: true
+                text: qsTr("Pin this message?")
+                color: Theme.text
+                font.pixelSize: 15
+                font.weight: Font.DemiBold
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 10
+                ToggleSwitch { id: notifySwitch }
+                Text {
+                    Layout.fillWidth: true
+                    wrapMode: Text.Wrap
+                    text: messages.chatType === "private"
+                          ? qsTr("Also notify %1").arg(messages.chatTitle)
+                          : qsTr("Notify all members")
+                    color: Theme.text
+                    font.pixelSize: Theme.fontBody
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+                Item { Layout.fillWidth: true }
+                PillButton {
+                    text: qsTr("Cancel")
+                    onClicked: pinDialog.close()
+                }
+                PillButton {
+                    objectName: "pinConfirm"
+                    text: qsTr("Pin")
+                    filled: true
+                    onClicked: {
+                        messages.pinMessage(pinDialog.messageId, notifySwitch.checked)
+                        pinDialog.close()
+                    }
+                }
+            }
         }
     }
 

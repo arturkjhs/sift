@@ -148,6 +148,12 @@ def responder(req: dict[str, Any]) -> list[dict[str, Any]]:
         case "getMessages":
             return [{"@type": "messages", "total_count": 0, "messages": [],
                      "@extra": req["@extra"]}]
+        case "searchChatMessages" if (req.get("filter") or {}).get("@type") == (
+                "searchMessagesFilterPinned") and req["chat_id"] == 1:
+            found = [_msg(3, "See **you** at https://example.com 🚀", out=True),
+                     _msg(1, "Hi!")]
+            return [{"@type": "foundChatMessages", "total_count": 2, "next_from_message_id": 0,
+                     "messages": found, "@extra": req["@extra"]}]
         case "sendMessage":
             sent = _msg(6, req["input_message_content"]["text"]["text"], out=True)
             return [{"@type": "updateNewMessage", "message": sent},
@@ -318,6 +324,10 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         counts = sorted(v.property("count") for v in find_list_views(window.contentItem()))
         self.assertIn(5, counts, f"messages not rendered, ListView counts: {counts}")
 
+        await wait_until(lambda: (pump(), session.messages.pinnedCount)[1] == 2)
+        pinned_bar = next(i for i in _all_items(window.contentItem())
+                          if i.objectName() == "pinnedBar")
+        self.assertTrue(pinned_bar.isVisible())
         session.messages.send("hello", 0)
         await wait_until(lambda: (pump(), session.messages.rowCount())[1] == 6)
         pump()

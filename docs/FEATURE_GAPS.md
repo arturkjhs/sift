@@ -94,8 +94,9 @@
   `image://tg/media`. Отключение превью при отправке своего сообщения.
   → `store/link_preview.py`, роль `linkPreview` + `linkCard` в `MessageDelegate.qml`; в поле ввода — превью через `getLinkPreview` и «убрать» (`ComposerModel.linkPreview/sendOptions`).
 
-- [ ] **Закреплённое сообщение в шапке чата.** `getChatPinnedMessage`, полоса под шапкой,
+- [x] **Закреплённое сообщение в шапке чата.** `getChatPinnedMessage`, полоса под шапкой,
   клик — прыжок к сообщению; при нескольких закрепах — переключение по кругу.
+  → `store/pinned.py` (`searchMessagesFilterPinned`, `updateMessageIsPinned`), полоса `pinnedBar`, Pin/Unpin в меню сообщения (`pinDialog`), «Unpin all»; заодно «Copy link» (`getMessageLink`).
 
 - [ ] **Темы (форумы) в супергруппах.** Для `is_forum`: список тем (`getForumTopics`),
   история темы (`getMessageThreadHistory` или аналог), отправка в тему, непрочитанное

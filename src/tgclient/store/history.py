@@ -79,6 +79,7 @@ class ChatHistory:
             "updateMessageContent": self._on_content,
             "updateMessageEdited": self._on_edited,
             "updateMessageInteractionInfo": self._on_interaction_info,
+            "updateMessageIsPinned": self._on_is_pinned,
             "updateDeleteMessages": self._on_delete,
         }
         self._unsubscribe = [client.on(t, h) for t, h in handlers.items()]
@@ -382,6 +383,14 @@ class ChatHistory:
         if row >= 0:
             self.messages[row] = {**self.messages[row],
                                   "interaction_info": event.get("interaction_info")}
+            self._listener.history_changed(row)
+
+    def _on_is_pinned(self, event: Event) -> None:
+        if event.get("chat_id") != self.chat_id:
+            return
+        row = self.row_of(event["message_id"])
+        if row >= 0:
+            self.messages[row] = {**self.messages[row], "is_pinned": bool(event["is_pinned"])}
             self._listener.history_changed(row)
 
     def _on_delete(self, event: Event) -> None:

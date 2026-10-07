@@ -369,6 +369,12 @@ src/tgclient/
   (id по возрастанию — порядок для `forwardMessages`).
 - Взаимодействие: двойной клик по пузырю — ответить; правый клик — меню (Reply, Copy text);
   Enter — отправить, Shift+Enter — перенос; клик по цитате — прыжок к сообщению (если загружено).
+- Закрепы: `store/pinned.py` (`PinnedMessages`, Qt-free) грузит все закреплённые
+  (`searchChatMessages` с `searchMessagesFilterPinned`, запасной — `getChatPinnedMessage`) и
+  обновляется по `updateMessageIsPinned`/удалениям. Полоса под шапкой показывает одно; клик —
+  `messages.nextPinned()` отдаёт показанное (QML прыгает к нему) и переходит к следующему
+  старшему по кругу. Pin/Unpin и «Copy link» в меню — по `can_be_pinned`/`can_get_link` из
+  `getMessageProperties`.
 - Превью ссылок: `store/link_preview.parse` (linkPreview: фото, обложка/миниатюра видео,
   chatPhoto у ссылок на людей/чаты) → роль `linkPreview` (карточка под текстом; картинка сбоку
   или во всю ширину при `show_large_media`). В поле ввода `ComposerModel` спрашивает
@@ -550,8 +556,7 @@ uv run python -m unittest discover -s tests
 - Уведомления: ответ прямо из уведомления (macOS `UNTextInputNotificationAction`, Linux
   `inline-reply`), звук по чату (`notification_sound_id`), уведомления о реакциях на свои
   сообщения и о звонках; бейдж во Flatpak (Unity LauncherEntry через песочницу) не проверен.
-- Сообщения: «Copy link», закрепление,
-  пересылка с подписью/без автора, кастомные эмодзи в реакциях (сейчас ✦),
+- Сообщения: пересылка с подписью/без автора, кастомные эмодзи в реакциях (сейчас ✦),
   права на реакции/правку из `chat.permissions`.
 - Иконки: набор в `ui/icons.py` начат; перевести на него оставшиеся глифы (кнопка «+», статусы
   ✓✓, плеер голосовых, файлы).
