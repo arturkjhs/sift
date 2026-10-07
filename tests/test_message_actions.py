@@ -262,6 +262,34 @@ class SelectionTest(ActionCase):
         self.assertEqual(self.model.selectionCount, 0)
 
 
+class ReactorsTest(ActionCase):
+    async def test_tooltip_names_recent_then_full_list(self) -> None:
+        def added(req: dict[str, Any]) -> list[dict[str, Any]] | None:
+            if req["@type"] != "getMessageAddedReactions":
+                return None
+            return [{"@type": "addedReactions", "total_count": 3, "next_offset": "",
+                     "@extra": req["@extra"], "reactions": [
+                         {"type": req["reaction_type"], "is_outgoing": False, "date": 1,
+                          "sender_id": {"@type": "messageSenderUser", "user_id": u}}
+                         for u in (5, 6, 7)]}]
+
+        self.server.hook = added
+        await self.push({"@type": "updateUser", "user": {"id": 7, "first_name": "Jana"}})
+        await self.open_loaded()
+        reaction = {"type": {"@type": "reactionTypeEmoji", "emoji": "👍"}, "total_count": 3,
+                    "is_chosen": False, "recent_sender_ids": [
+                        {"@type": "messageSenderUser", "user_id": 5}]}
+        await self.push({"@type": "updateMessageInteractionInfo", "chat_id": CHAT,
+                         "message_id": 4, "interaction_info": {"reactions": {
+                             "@type": "messageReactions", "reactions": [reaction],
+                             "are_tags": False, "can_get_added_reactions": True}}})
+        self.assertEqual(self.model.reactorsText(4, "👍"), "Olena K and 2 more")
+        await wait_until(lambda: self.model.reactorsVersion == 1)
+        self.assertEqual(self.model.reactorsText(4, "👍"), "Olena K, Petr, Jana")
+        self.assertEqual(len(self.sent("getMessageAddedReactions")), 1)
+        self.assertEqual(self.model.reactorsText(4, "🔥"), "")
+
+
 class PrivateStatusTest(ActionCase):
     async def test_private_chat_shows_last_seen(self) -> None:
         await self.push(new_chat(5, "Olena", 2, "chatTypePrivate"))

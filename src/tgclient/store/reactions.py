@@ -6,7 +6,7 @@ for star reactions. `display()` is what to draw: some emoji need U+FE0F to rende
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 # Telegram's standard emoji reactions as TDLib spells them (the heart is "❤" without
@@ -47,6 +47,7 @@ class Reaction:
     key: str
     count: int
     chosen: bool
+    recent: tuple[dict[str, Any], ...] = field(default=(), compare=False)  # MessageSenders
 
     @property
     def label(self) -> str:
@@ -83,8 +84,25 @@ def message_reactions(message: dict[str, Any]) -> list[Reaction]:
     for raw in reactions:
         key = reaction_key(raw.get("type"))
         if key and raw.get("total_count", 0) > 0:
-            result.append(Reaction(key, raw["total_count"], bool(raw.get("is_chosen"))))
+            result.append(Reaction(key, raw["total_count"], bool(raw.get("is_chosen")),
+                                   tuple(raw.get("recent_sender_ids") or ())))
     return result
+
+
+def can_list_reactors(message: dict[str, Any]) -> bool:
+    """Whether getMessageAddedReactions works for the message (small groups, own messages)."""
+    reactions = (message.get("interaction_info") or {}).get("reactions")
+    return isinstance(reactions, dict) and bool(reactions.get("can_get_added_reactions"))
+
+
+def reactors_text(names: list[str], total: int) -> str:
+    """'Olena, Petr and 3 more' for a reaction's tooltip; '' if nobody is known."""
+    names = [n for n in names if n]
+    if not names:
+        return ""
+    shown = ", ".join(names[:10])
+    rest = total - min(len(names), 10)
+    return f"{shown} and {rest} more" if rest > 0 else shown
 
 
 def available_keys(available: dict[str, Any], limit: int | None = None) -> list[str]:

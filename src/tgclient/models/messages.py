@@ -55,8 +55,10 @@ from ..store.reactions import (
     QUICK,
     as_items,
     available_keys,
+    can_list_reactors,
     message_reactions,
     reaction_type,
+    reactors_text,
 )
 from ..store.richtext import Palette, formatted_to_html
 from ..store.users import UserStore
@@ -196,6 +198,7 @@ class MessageListModel(QAbstractListModel):
     latestChanged = Signal()
     countersChanged = Signal()
     selectionChanged = Signal()
+    reactorsChanged = Signal()
 
     def __init__(
         self, client: TdClient, chats: ChatStore, users: UserStore,
@@ -216,6 +219,9 @@ class MessageListModel(QAbstractListModel):
         self._first_unread = 0  # message showing the "Unread messages" separator
         self._at_latest = True
         self._selected: set[int] = set()
+        self._reactors: dict[tuple[int, str], list[str]] = {}  # (message, key) -> names
+        self._reactors_asked: set[tuple[int, str]] = set()
+        self._reactors_version = 0
         self._select_anchor = 0  # last message toggled: Shift-click selects from it
         self._files: FileManager = chats.files
         self._files.subscribe(self._on_file)
@@ -373,6 +379,50 @@ class MessageListModel(QAbstractListModel):
                     index = self.index(each)
                     self.dataChanged.emit(index, index, [Role.Selected])
         self.selectionChanged.emit()
+
+    @Property(int, notify=reactorsChanged)
+    def reactorsVersion(self) -> int:
+        """Bumped when names for reactorsText() arrive (QML re-evaluates its tooltips)."""
+        return self._reactors_version
+
+    @Slot("QVariant", str, result=str)
+    def reactorsText(self, message_id: Any, key: str) -> str:
+        """Who set a reaction, for its tooltip: the recent senders TDLib sends along, then the
+        full list (getMessageAddedReactions, where allowed) once fetched."""
+        history = self._history
+        message = history.get(int(message_id or 0)) if history else None
+        reaction = next((r for r in message_reactions(message) if r.key == key),
+                        None) if message else None
+        if history is None or message is None or reaction is None:
+            return ""
+        cache_key = (message["id"], key)
+        names = self._reactors.get(cache_key)
+        if names is None:
+            names = [self._sender_obj_name(s) for s in reaction.recent]
+            if (len(names) < reaction.count and can_list_reactors(message)
+                    and cache_key not in self._reactors_asked):
+                self._reactors_asked.add(cache_key)
+                self._spawn(self._fetch_reactors(history, message["id"], key))
+        return reactors_text(names, reaction.count)
+
+    async def _fetch_reactors(self, history: ChatHistory, message_id: int, key: str) -> None:
+        try:
+            found = await self._client.send({
+                "@type": "getMessageAddedReactions", "chat_id": history.chat_id,
+                "message_id": message_id, "reaction_type": reaction_type(key), "offset": "",
+                "limit": 50})
+        except TdError as e:
+            log.info("getMessageAddedReactions failed: %s", e)
+            return
+        if history is not self._history:
+            return
+        self._reactors[(message_id, key)] = [
+            self._sender_obj_name(r.get("sender_id") or {}) for r in found.get("reactions") or []]
+        self._reactors_version += 1
+        self.reactorsChanged.emit()
+
+    def _sender_obj_name(self, sender: dict[str, Any]) -> str:
+        return self._sender_name({"sender_id": sender})
 
     @Property(int, notify=countersChanged)
     def unreadCount(self) -> int:
@@ -1316,6 +1366,9 @@ class MessageListModel(QAbstractListModel):
     def _row_changed(self, row: int) -> None:
         if self._history and 0 <= row < len(self._history.messages):
             message_id = self._history.messages[row]["id"]
+            for stale in [k for k in self._reactors_asked if k[0] == message_id]:
+                self._reactors_asked.discard(stale)  # reactions may have changed
+                self._reactors.pop(stale, None)
             self._html_cache.pop(message_id, None)
             self._media_cache.pop(message_id, None)
             index = self.index(row)

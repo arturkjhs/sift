@@ -596,6 +596,17 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
         QMetaObject.invokeMethod(picker, "close")
         await settle(0.15)
 
+        # The hover button: the reaction grid opens over the message once TDLib answers
+        reaction_picker = window.findChild(QObject, "reactionPicker")
+        reaction_picker.setProperty("waitingFor", 2)
+        session.messages.requestActions(2)
+        await wait_until(lambda: (pump(), reaction_picker.property("opened"))[1])
+        await settle()
+        self.assertEqual(reaction_picker.property("messageId"), 2)
+        _screenshot(window, "hover-reactions")
+        QMetaObject.invokeMethod(reaction_picker, "close")
+        await settle(0.15)
+
         # Editing: the composer switches to edit mode and back
         composer = find_item(window.contentItem(), "composerInput")
         session.messages.startEdit(3)

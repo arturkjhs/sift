@@ -62,6 +62,7 @@ Item {
     signal senderClicked(string senderKey, string senderName, var messageId)
     signal reactionToggled(var messageId, string key)
     signal selectToggled(var messageId, bool range)   // range: Shift-click
+    signal reactRequested(var messageId, var button)   // the hover button: pick a reaction
 
     readonly property real sidePadding: 16
     readonly property real avatarSpace: isGroupChat && !isOutgoing ? 40 : 0
@@ -199,6 +200,35 @@ Item {
                 HoverHandler { cursorShape: Qt.PointingHandCursor }
                 TapHandler {
                     onTapped: root.senderClicked(root.senderKey, root.senderName, root.messageId)
+                }
+            }
+
+            HoverHandler { id: rowHover }
+
+            // Shown while the pointer is over the message: pick a reaction without the menu.
+            AbstractButton {
+                id: reactButton
+                objectName: "reactButton"
+                visible: (rowHover.hovered || hovered) && !root.selecting && !root.albumHidden
+                width: 28
+                height: 28
+                x: root.isOutgoing ? bubble.x - width - 6 : bubble.x + bubble.width + 6
+                anchors.bottom: bubble.bottom
+                hoverEnabled: true
+                Accessible.name: qsTr("React")
+                onClicked: root.reactRequested(root.messageId, reactButton)
+                background: Rectangle {
+                    radius: width / 2
+                    color: reactButton.hovered ? Theme.hover : Theme.popup
+                    border.width: 1
+                    border.color: Theme.popupBorder
+                }
+                contentItem: Item {
+                    Icon {
+                        anchors.centerIn: parent
+                        name: "emoji"
+                        size: 16
+                    }
                 }
             }
 
@@ -518,6 +548,14 @@ Item {
                                     id: pillHover
                                     cursorShape: Qt.PointingHandCursor
                                 }
+                                // Who reacted (names arrive later for bigger lists).
+                                readonly property string reactors: pillHover.hovered
+                                    ? (messages.reactorsVersion,
+                                       messages.reactorsText(root.messageId, modelData.key))
+                                    : ""
+                                ToolTip.visible: pillHover.hovered && reactors !== ""
+                                ToolTip.delay: 400
+                                ToolTip.text: reactors
                                 TapHandler {
                                     onTapped: root.reactionToggled(root.messageId,
                                                                    pill.modelData.key)

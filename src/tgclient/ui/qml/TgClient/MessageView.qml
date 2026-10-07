@@ -39,6 +39,18 @@ Item {
             list.pinIfSticky()
         }
         function onActionsReady(messageId, actions) {
+            if (messageId === reactionPicker.waitingFor) {  // the hover button
+                reactionPicker.waitingFor = 0
+                const overlay = reactionPicker.parent  // Overlay.overlay (null in Connections)
+                const reactions = actions.allReactions || []
+                if (reactions.length === 0)
+                    return
+                reactionPicker.openAt(messageId, reactions, actions.chosen || [])
+                reactionPicker.x = Math.max(8, Math.min(reactionPicker.anchorPoint.x - 8,
+                                                        overlay.width - reactionPicker.width - 8))
+                reactionPicker.y = Math.max(8, reactionPicker.anchorPoint.y - reactionPicker.height - 6)
+                return
+            }
             if (messageId !== messageMenu.messageId || !messageMenu.waiting)
                 return
             messageMenu.waiting = false
@@ -246,6 +258,12 @@ Item {
                     selecting: messages.selectionCount > 0
                     onSelectToggled: (id, range) => range ? messages.selectRange(id)
                                                           : messages.toggleSelected(id)
+                    onReactRequested: (id, button) => {
+                        const at = button.mapToItem(Overlay.overlay, 0, 0)
+                        reactionPicker.waitingFor = id
+                        reactionPicker.anchorPoint = Qt.point(at.x, at.y)
+                        messages.requestActions(id)
+                    }
                     onJumpRequested: id => root.showMessage(id)
                     onReactionToggled: (id, key) => messages.toggleReaction(id, key)
                     onMenuRequested: id => {
@@ -946,6 +964,8 @@ Item {
 
     ReactionPicker {
         id: reactionPicker
+        property var waitingFor: 0       // hover button clicked: opens when actions arrive
+        property point anchorPoint: Qt.point(0, 0)
         parent: Overlay.overlay
         onPicked: (messageId, key) => messages.toggleReaction(messageId, key)
     }
