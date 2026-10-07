@@ -783,6 +783,15 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
                          and session.messages.rowOf(300) >= 0)
         self.assertEqual(warnings, [], "QML warnings with the jump buttons")
 
+        # A new poll from the attach menu
+        poll_editor = window.findChild(QObject, "pollEditor")
+        QMetaObject.invokeMethod(poll_editor, "start")
+        await settle()
+        self.assertTrue(poll_editor.property("opened"))
+        _screenshot(window, "poll-editor")
+        QMetaObject.invokeMethod(poll_editor, "close")
+        await settle(0.15)
+
         # Sending later: the Send button's menu, the time picker, the scheduled list
         send_menu = window.findChild(QObject, "sendMenu")
         QMetaObject.invokeMethod(send_menu, "popup")

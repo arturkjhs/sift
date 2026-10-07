@@ -499,8 +499,8 @@ Rectangle {
                 visible: root.editingId === 0
                 iconName: "attach"
                 glyphSize: 19
-                Accessible.name: qsTr("Attach files")
-                onClicked: fileDialog.open()
+                Accessible.name: qsTr("Attach")
+                onClicked: attachMenu.popup(attachButton, 0, -attachMenu.implicitHeight - 6)
             }
 
             ScrollView {
@@ -645,6 +645,25 @@ Rectangle {
                 }
             }
         }
+    }
+
+    AppMenu {
+        id: attachMenu
+        objectName: "attachMenu"
+        AppMenuItem {
+            text: qsTr("Photo or file")
+            iconName: "file"
+            onTriggered: fileDialog.open()
+        }
+        AppMenuItem {
+            text: qsTr("Poll")
+            iconName: "summary"
+            onTriggered: pollEditor.start()
+        }
+    }
+
+    PollEditor {
+        id: pollEditor
     }
 
     AppMenu {

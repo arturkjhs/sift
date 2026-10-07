@@ -38,3 +38,4 @@ PollContent 1.0 PollContent.qml
 ScheduleDialog 1.0 ScheduleDialog.qml
 ScheduledList 1.0 ScheduledList.qml
 FolderEditorDialog 1.0 FolderEditorDialog.qml
+PollEditor 1.0 PollEditor.qml

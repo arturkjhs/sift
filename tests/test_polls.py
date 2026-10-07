@@ -85,5 +85,21 @@ class PollModelTest(ActionCase):
                          "Olena K")
 
 
+    async def test_send_poll_and_quiz(self) -> None:
+        await self.open_loaded()
+        self.model.sendPoll({"question": "When?", "options": ["Sat", " ", "Sun"],
+                             "anonymous": False, "multiple": True})
+        self.model.sendPoll({"question": "Capital of Czechia?", "options": ["Brno", "Prague"],
+                             "quiz": True, "correct": 1, "explanation": "Since 1918"})
+        self.model.sendPoll({"question": "Lonely", "options": ["one"]})  # not enough options
+        await wait_until(lambda: len(self.sent("sendMessage")) == 2)
+        poll, quiz = (r["input_message_content"] for r in self.sent("sendMessage"))
+        self.assertEqual([o["text"]["text"] for o in poll["options"]], ["Sat", "Sun"])
+        self.assertEqual((poll["is_anonymous"], poll["allows_multiple_answers"],
+                          poll["type"]["@type"]), (False, True, "inputPollTypeRegular"))
+        self.assertEqual((quiz["type"]["correct_option_ids"], quiz["allows_multiple_answers"],
+                          quiz["type"]["explanation"]["text"]), ([1], False, "Since 1918"))
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -437,6 +437,8 @@ src/tgclient/
   по клику, несколько — галочки и «Vote»), результаты после голоса/закрытия; `updatePoll`
   приходит без сообщения — `ChatHistory` ищет его по `poll.id`. Пункты чек-листа —
   `markTask` (`markChecklistTasksAsDone`), если `can_mark_tasks_as_done`.
+  Создание: «+» в поле ввода → меню (файл / опрос) → `PollEditor.qml` → `messages.sendPoll`
+  (`inputMessagePoll`, викторина — `inputPollTypeQuiz` с правильным вариантом и пояснением).
 - Профиль (`ProfileModel` = `profile`, `ProfilePanel.qml` справа вместо панели AI — открыта
   одна из двух): клик по заголовку чата или «View profile» в меню человека. Человек —
   `getUserFullInfo` (bio, `bot_info.short_description`), `getGroupsInCommon`; группа —

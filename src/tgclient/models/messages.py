@@ -1410,6 +1410,36 @@ class MessageListModel(QAbstractListModel):
         }
         self._spawn(self._send_content(history.chat_id, content, int(reply_to or 0)))
 
+    @Slot("QVariantMap")
+    def sendPoll(self, poll: dict[str, Any]) -> None:
+        """From the poll editor: {question, options: [text], anonymous, multiple, quiz,
+        correct (option index), explanation}."""
+        history = self._history
+        question = str(poll.get("question") or "").strip()
+        options = [str(o).strip() for o in poll.get("options") or [] if str(o).strip()]
+        if history is None or not question or len(options) < 2:
+            return
+        quiz = bool(poll.get("quiz"))
+        text = lambda value: {"@type": "formattedText", "text": value, "entities": []}  # noqa: E731
+        content = {
+            "@type": "inputMessagePoll", "question": text(question[:300]),
+            "options": [{"@type": "inputPollOption", "text": text(o[:100]), "media": None}
+                        for o in options[:12]],
+            "description": None, "media": None,
+            "is_anonymous": bool(poll.get("anonymous", True)),
+            "allows_multiple_answers": bool(poll.get("multiple")) and not quiz,
+            "allows_revoting": not quiz, "members_only": False, "country_codes": [],
+            "shuffle_options": False, "hide_results_until_closes": False,
+            "type": {"@type": "inputPollTypeQuiz",
+                     "correct_option_ids": [int(poll.get("correct") or 0)],
+                     "explanation": text(str(poll.get("explanation") or "")[:200]),
+                     "explanation_media": None} if quiz
+            else {"@type": "inputPollTypeRegular", "allow_adding_options": False},
+            "open_period": 0, "close_date": 0, "is_closed": False,
+        }
+        self._clear_unread_separator()
+        self._spawn(self._send_content(history.chat_id, content, 0))
+
     @Slot("QVariantMap", "QVariant")
     def sendAnimation(self, animation: dict[str, Any], reply_to: Any = 0) -> None:
         """A GIF from the picker (saved or found): sent by its file, no upload."""
