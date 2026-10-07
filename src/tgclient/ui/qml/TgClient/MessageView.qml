@@ -216,7 +216,7 @@ Item {
                         const row = messages.rowOf(anchorId)
                         if (row >= 0)
                             positionViewAtIndex(row, ListView.End)
-                    } else if (stickToBottom) {
+                    } else if (stickToBottom && messages.atLatest) {
                         positionViewAtBeginning()
                     }
                 }
@@ -278,13 +278,15 @@ Item {
                 }
                 onContentHeightChanged: Qt.callLater(pinIfSticky)
                 onMovementStarted: anchorId = 0
-                onMovementEnded: stickToBottom = atYEnd
+                // At the bottom of a window that stops short of the newest message, newer pages
+                // load as the user scrolls: following the bottom would load them all.
+                onMovementEnded: stickToBottom = atYEnd && messages.atLatest
 
                 ScrollBar.vertical: ScrollBar {
                     onPressedChanged: {
                         list.anchorId = 0
                         if (!pressed)
-                            list.stickToBottom = list.atYEnd
+                            list.stickToBottom = list.atYEnd && messages.atLatest
                     }
                 }
 
@@ -330,45 +332,63 @@ Item {
         }
     }
 
-    // Back to the newest message.
-    AbstractButton {
+    // Jump buttons over the feed's bottom-right corner: unread reactions, mentions, newest.
+    Column {
+        id: jumpButtons
         x: list.width - width - 18
         anchors.bottom: parent.bottom
         anchors.bottomMargin: composer.height + 14
-        width: 38
-        height: 38
-        visible: !list.atYEnd && list.count > 0
-        hoverEnabled: true
-        Accessible.name: qsTr("Scroll to latest")
-        onClicked: {
-            list.anchorId = 0
-            list.stickToBottom = true
-            list.positionViewAtBeginning()
-        }
+        spacing: 16  // room for the counters on top
 
-        background: Item {
-            Rectangle {
-                anchors.fill: parent
-                anchors.topMargin: 2
-                anchors.bottomMargin: -2
-                radius: width / 2
-                color: Theme.shadow
-                opacity: 0.5
-            }
-            Rectangle {
-                anchors.fill: parent
-                radius: width / 2
-                color: parent.parent.hovered ? Theme.hover : Theme.popup
-                border.width: 1
-                border.color: Theme.popupBorder
+        JumpButton {
+            objectName: "reactionJump"
+            visible: messages.reactionCount > 0
+            iconName: "heart"
+            count: messages.reactionCount
+            accessibleName: qsTr("Next unread reaction")
+            onClicked: messages.nextReaction()
+            onMenuRequested: jumpMenu.openFor("reactions")
+        }
+        JumpButton {
+            objectName: "mentionJump"
+            visible: messages.mentionCount > 0
+            glyph: "@"
+            count: messages.mentionCount
+            accessibleName: qsTr("Next mention")
+            onClicked: messages.nextMention()
+            onMenuRequested: jumpMenu.openFor("mentions")
+        }
+        JumpButton {  // back to the newest message
+            objectName: "latestJump"
+            visible: (!list.atYEnd || !messages.atLatest) && list.count > 0
+            iconName: "arrow-down"
+            count: messages.unreadCount
+            accessibleName: qsTr("Scroll to latest")
+            onClicked: {
+                list.anchorId = 0
+                list.stickToBottom = true
+                if (messages.atLatest)
+                    list.positionViewAtBeginning()
+                else
+                    messages.jumpToLatest()
             }
         }
-        contentItem: Item {
-            Icon {
-                anchors.centerIn: parent
-                name: "arrow-down"
-                size: 18
-            }
+    }
+
+    AppMenu {
+        id: jumpMenu
+        objectName: "jumpMenu"
+        property string kind: ""
+        function openFor(what) {
+            kind = what
+            popup()
+        }
+        AppMenuItem {
+            text: jumpMenu.kind === "mentions" ? qsTr("Mark all mentions as read")
+                                               : qsTr("Mark all reactions as read")
+            iconName: "check"
+            onTriggered: jumpMenu.kind === "mentions" ? messages.readAllMentions()
+                                                      : messages.readAllReactions()
         }
     }
 

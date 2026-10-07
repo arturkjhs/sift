@@ -13,8 +13,12 @@ from tgclient.store.presence import PresenceStore
 
 
 class ActionServer(Server):
+    hook: Any = None  # a test's own answers, tried first (None: not handled)
+
     def __call__(self, req: dict[str, Any]) -> list[dict[str, Any]]:
         extra = req.get("@extra")
+        if self.hook is not None and (answer := self.hook(req)) is not None:
+            return answer
         match req["@type"]:
             case "getMessageProperties":
                 out = req["message_id"] >= 10_000
@@ -251,17 +255,77 @@ class FarUnreadTest(ActionCase):
     total = 500
 
     def chat_fields(self) -> dict[str, Any]:
-        return {"unread_count": 495, "last_read_inbox_message_id": 5}
+        return {"unread_count": 495, "last_read_inbox_message_id": 5,
+                "last_message": msg(500), "unread_mention_count": 2}
 
-    async def test_too_far_back_opens_at_the_bottom(self) -> None:
+    async def test_far_unread_opens_around_it_and_loads_newer(self) -> None:
         rows: list[int] = []
+        latest: list[bool] = []
         self.model.unreadReady.connect(rows.append)
+        self.model.latestChanged.connect(lambda: latest.append(self.model.atLatest))
         self.model.open(CHAT)
-        await wait_until(lambda: not self.model.loading and self.model.rowCount() > 50)
-        await wait_until(lambda: not self.model._history.loading)
-        self.assertEqual(rows, [])
-        self.assertGreater(self.model._history.messages[-1]["id"], 5)
+        await wait_until(lambda: bool(rows))
+        self.assertEqual(rows, [6])  # however far back
+        history = self.model._history
+        self.assertFalse(self.model.atLatest)
+        self.assertLess(history.messages[0]["id"], 100)
+        self.assertEqual(self.model.unreadCount, 495)
+        self.assertEqual(self.model.mentionCount, 2)
 
+        # a live message past the window is not inserted (it would leave a gap)
+        await self.push({"@type": "updateNewMessage", "message": msg(501, "live")})
+        self.assertEqual(self.model.rowOf(501), -1)
+
+        # scrolling down: rows near the bottom load the next newer page
+        newest = history.messages[0]["id"]
+        self.role(0, self.Role.Html)
+        await wait_until(lambda: history.messages[0]["id"] > newest and not history.loading)
+        self.assertEqual([m["id"] for m in history.messages],
+                         sorted((m["id"] for m in history.messages), reverse=True))
+
+        # "down": the newest page again
+        self.model.jumpToLatest()
+        await wait_until(lambda: self.model.atLatest and self.model.rowOf(500) >= 0)
+        self.assertEqual(latest, [False, True])
+
+    async def test_jump_far_back_reloads_around_the_message(self) -> None:
+        self.model.open(CHAT)
+        rows: list[int] = []
+        self.model.jumpReady.connect(rows.append)
+        await wait_until(lambda: bool(rows) or self.model.rowCount() > 0)
+        self.model.jumpToLatest()
+        await wait_until(lambda: self.model.atLatest and not self.model.loading)
+        self.model.jumpTo(30)
+        await wait_until(lambda: bool(rows))
+        self.assertEqual(rows[-1], self.model.rowOf(30))
+        self.assertFalse(self.model.atLatest)
+        self.model.send("hi", 0)  # sending returns to the newest messages
+        await wait_until(lambda: self.model.atLatest)
+
+    async def test_next_mention_jumps_to_the_oldest_unread_one(self) -> None:
+        found: list[dict[str, Any]] = []
+
+        def search(req: dict[str, Any]) -> list[dict[str, Any]] | None:
+            if req["@type"] == "searchChatMessages":
+                found.append(req)
+                return [{"@type": "foundChatMessages", "total_count": 2, "next_from_message_id": 0,
+                         "messages": [msg(400), msg(250)], "@extra": req["@extra"]}]
+            return None
+
+        self.server.hook = search
+        rows: list[int] = []
+        self.model.jumpReady.connect(rows.append)
+        self.model.open(CHAT)
+        await wait_until(lambda: self.model.rowCount() > 0 and not self.model.loading)
+        self.model.nextMention()
+        await wait_until(lambda: bool(rows))
+        self.assertEqual(found[0]["filter"], {"@type": "searchMessagesFilterUnreadMention"})
+        self.assertEqual(rows[-1], self.model.rowOf(250))
+        self.model.readAllMentions()
+        await wait_until(lambda: any(r["@type"] == "readAllChatMentions" for r in self.lib.sent))
+        await self.push({"@type": "updateChatUnreadMentionCount", "chat_id": CHAT,
+                         "unread_mention_count": 0})
+        self.assertEqual(self.model.mentionCount, 0)
 
 if __name__ == "__main__":
     unittest.main()

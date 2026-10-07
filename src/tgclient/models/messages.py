@@ -67,7 +67,7 @@ log = logging.getLogger(__name__)
 AVATAR_COLORS = 7
 GROUP_WINDOW_SECONDS = 5 * 60
 EDIT_WINDOW_SECONDS = 48 * 3600  # fallback when getMessageProperties isn't available
-UNREAD_MAX_PAGES = 6  # how far back opening a chat pages to reach the first unread message
+NEAR_JUMP_PAGES = 3  # a jump this close pages older history in; farther ones reload around it
 ALBUM_WIDTH = 320  # albums are laid out for this width; QML scales down narrower bubbles
 AUTOPLAY_MAX_BYTES = 10 * 1024 * 1024  # GIFs up to this size download and play by themselves
 AnyIndex = QModelIndex | QPersistentModelIndex
@@ -165,6 +165,18 @@ class _Adapter:
         if self._current():
             self._model._row_changed(row)
 
+    def history_reset(self, commit: Commit) -> None:
+        if not self._current():
+            commit()
+            return
+        model = self._model
+        model.beginResetModel()
+        commit()
+        model._html_cache = {}
+        model._media_cache = {}
+        model.endResetModel()
+        model._sync_latest()
+
 
 class MessageListModel(QAbstractListModel):
     chatChanged = Signal()
@@ -177,6 +189,8 @@ class MessageListModel(QAbstractListModel):
     editReady = Signal("QVariant", str)  # message id, its text as markdown for the composer
     statusChanged = Signal()
     linkResolved = Signal("QVariant", "QVariant")  # chat id, message id (0: just the chat)
+    latestChanged = Signal()
+    countersChanged = Signal()
 
     def __init__(
         self, client: TdClient, chats: ChatStore, users: UserStore,
@@ -195,6 +209,7 @@ class MessageListModel(QAbstractListModel):
         self._file_messages: dict[int, set[int]] = {}  # file id -> message ids showing it
         self._unread_after = 0  # last read incoming message id when the chat was opened
         self._first_unread = 0  # message showing the "Unread messages" separator
+        self._at_latest = True
         self._files: FileManager = chats.files
         self._files.subscribe(self._on_file)
         mono = QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont).family()
@@ -236,6 +251,27 @@ class MessageListModel(QAbstractListModel):
     @Property(bool, notify=loadingChanged)
     def loading(self) -> bool:
         return self._loading
+
+    @Property(bool, notify=latestChanged)
+    def atLatest(self) -> bool:
+        """The newest message is loaded (false after opening on an old unread message or
+        jumping far back: the view then loads newer pages and "down" reloads the newest)."""
+        return self._at_latest
+
+    @Property(int, notify=countersChanged)
+    def unreadCount(self) -> int:
+        chat = self._chat()
+        return chat.unread_count if chat else 0
+
+    @Property(int, notify=countersChanged)
+    def mentionCount(self) -> int:
+        chat = self._chat()
+        return chat.unread_mention_count if chat else 0
+
+    @Property(int, notify=countersChanged)
+    def reactionCount(self) -> int:
+        chat = self._chat()
+        return chat.unread_reaction_count if chat else 0
 
     @Property(str, notify=statusChanged)
     def chatStatus(self) -> str:
@@ -290,7 +326,8 @@ class MessageListModel(QAbstractListModel):
         if not chat_id:
             return
         ref: list[ChatHistory] = []
-        history = ChatHistory(self._client, chat_id, _Adapter(self, ref))
+        history = ChatHistory(self._client, chat_id, _Adapter(self, ref),
+                              last_message_id=lambda: self._last_message_id(chat_id))
         ref.append(history)
         self.beginResetModel()
         self._history = history
@@ -305,6 +342,8 @@ class MessageListModel(QAbstractListModel):
         self.endResetModel()
         self.chatChanged.emit()
         self.statusChanged.emit()
+        self.countersChanged.emit()
+        self._sync_latest()
         self._spawn(self._client.send({"@type": "openChat", "chat_id": chat_id}))
         self._spawn(self._run_load(history, self._load_initial(history)))
 
@@ -328,6 +367,70 @@ class MessageListModel(QAbstractListModel):
         history = self._history
         if history and not history.loading and not history.reached_start:
             self._spawn(self._run_load(history, history.load_older()))
+
+    @Slot()
+    def loadNewer(self) -> None:
+        history = self._history
+        if history and not history.loading and not history.reached_end:
+            self._spawn(self._run_load(history, self._load_newer(history)))
+
+    async def _load_newer(self, history: ChatHistory) -> None:
+        await history.load_newer()
+        if history is self._history:
+            self._sync_latest()
+
+    @Slot()
+    def jumpToLatest(self) -> None:
+        """"Down" when the window stops short of the newest message: reload the newest page."""
+        history = self._history
+        if history is not None and not history.reached_end:
+            self._spawn(self._run_load(history, self._load_latest(history)))
+
+    async def _load_latest(self, history: ChatHistory) -> None:
+        await history.load_latest()
+        if history is self._history:
+            self._sync_latest()
+
+    @Slot()
+    def nextMention(self) -> None:
+        """Jump to the oldest unread mention (viewing it marks it read)."""
+        self._spawn(self._jump_to_unread("searchMessagesFilterUnreadMention"))
+
+    @Slot()
+    def nextReaction(self) -> None:
+        """Jump to the oldest own message with an unread reaction."""
+        self._spawn(self._jump_to_unread("searchMessagesFilterUnreadReaction"))
+
+    @Slot()
+    def readAllMentions(self) -> None:
+        if self._history is not None:
+            self._spawn(self._request({"@type": "readAllChatMentions",
+                                       "chat_id": self._history.chat_id}, "Reading mentions"))
+
+    @Slot()
+    def readAllReactions(self) -> None:
+        if self._history is not None:
+            self._spawn(self._request({"@type": "readAllChatReactions",
+                                       "chat_id": self._history.chat_id}, "Reading reactions"))
+
+    async def _jump_to_unread(self, kind: str) -> None:
+        history = self._history
+        if history is None:
+            return
+        try:
+            found = await self._client.send({
+                "@type": "searchChatMessages", "chat_id": history.chat_id, "topic_id": None,
+                "query": "", "sender_id": None, "from_message_id": 0, "offset": 0,
+                "limit": 100, "filter": {"@type": kind}})
+        except TdError as e:
+            log.info("Searching %s failed: %s", kind, e)
+            return
+        ids = [m["id"] for m in found.get("messages") or [] if m]
+        if ids and history is self._history:
+            target = min(ids)  # the oldest one: read them in order
+            if kind.endswith("Reaction"):  # reactions are read when the message is viewed
+                self._viewed.discard(target)
+            self.jumpTo(target)
 
     @Slot(str, "QVariant")
     def send(self, text: str, reply_to: Any = 0) -> None:
@@ -471,8 +574,12 @@ class MessageListModel(QAbstractListModel):
             return
 
         async def load() -> None:
-            found = await history.load_until(message_id)
+            near = history.messages and message_id < history.messages[-1]["id"]
+            found = near and await history.load_until(message_id, max_pages=NEAR_JUMP_PAGES)
+            if not found and history is self._history:
+                found = await history.load_around(message_id)
             if found and history is self._history:
+                self._sync_latest()
                 self.jumpReady.emit(history.row_of(message_id))
 
         self._spawn(self._run_load(history, load()))
@@ -603,6 +710,8 @@ class MessageListModel(QAbstractListModel):
 
         if row >= len(history.messages) - 10:
             self.loadOlder()  # near the visual top: prefetch the next page
+        elif row < 10 and not history.reached_end:
+            self.loadNewer()  # near the bottom of a window that stops short of the newest
 
         match role:
             case Role.MessageId:
@@ -995,10 +1104,22 @@ class MessageListModel(QAbstractListModel):
                 and (saved or _now() - message.get("date", 0) < EDIT_WINDOW_SECONDS))
 
     def _clear_unread_separator(self) -> None:
+        """Sending something: the separator goes and the view returns to the newest message."""
         if self._first_unread and self._history:
             row = self._history.row_of(self._first_unread)
             self._first_unread = 0
             self._row_changed(row)
+        self.jumpToLatest()
+
+    def _last_message_id(self, chat_id: int) -> int:
+        chat = self._chats.chats.get(chat_id)
+        return int(((chat.last_message if chat else None) or {}).get("id") or 0)
+
+    def _sync_latest(self) -> None:
+        latest = self._history.reached_end if self._history else True
+        if latest != self._at_latest:
+            self._at_latest = latest
+            self.latestChanged.emit()
 
     def _short_text(self, message: Message) -> str:
         return " ".join(content_preview(message.get("content", {})).split())[:200]
@@ -1099,6 +1220,7 @@ class MessageListModel(QAbstractListModel):
     def _on_chat_store(self, kind: str, payload: Any) -> None:
         if kind == "chat" and self._history and payload == self._history.chat_id:
             self.chatChanged.emit()  # title etc.
+            self.countersChanged.emit()
             if self.rowCount() > 0:  # read receipts
                 self.dataChanged.emit(
                     self.index(0), self.index(self.rowCount() - 1), [Role.Status]
@@ -1170,21 +1292,20 @@ class MessageListModel(QAbstractListModel):
             history.add(message)
 
     async def _load_initial(self, history: ChatHistory) -> None:
-        """Newest page, then (if the chat has unread messages) back to the first unread one."""
-        await history.load_initial()
+        """The newest page, or (with unread messages) the history around the last read one,
+        however far back: newer pages load as the user scrolls down."""
         boundary = self._unread_after
-        if not boundary or history is not self._history:
+        if not boundary:
+            await history.load_initial()
             return
-        oldest = history.messages[-1]["id"] if history.messages else 0
-        if oldest > boundary and not history.reached_start:
-            await history.load_until(boundary, max_pages=UNREAD_MAX_PAGES)
+        await history.load_around(boundary)
         if history is not self._history:
             return
+        self._sync_latest()
         unread = [m for m in history.messages if m["id"] > boundary and not m.get("is_outgoing")]
-        reached = history.reached_start or (history.messages
-                                           and history.messages[-1]["id"] <= boundary)
-        if not unread or not reached:
-            return  # too far back: open at the newest message as usual
+        if not unread:
+            await self._load_latest(history)
+            return
         self._first_unread = unread[-1]["id"]
         self._row_changed(history.row_of(self._first_unread))
         self.unreadReady.emit(self._first_unread)

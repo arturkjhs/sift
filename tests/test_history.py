@@ -6,7 +6,7 @@ import time
 import unittest
 from typing import Any
 
-from fakes import FakeLib, error, new_chat, ok, qt_app, wait_until
+from fakes import FakeLib, error, history_ids, new_chat, ok, qt_app, wait_until
 
 from tgclient.store.chats import ChatStore
 from tgclient.store.history import ChatHistory
@@ -42,8 +42,7 @@ class Server:
                 if start == 0:
                     ids = [self.total]
                 else:
-                    ids = list(range(start, max(0, start - req["limit"]), -1))
-                    ids = [i for i in ids if i >= 1]
+                    ids = history_ids(list(range(1, self.total + 1)), req)
                 return [{"@type": "messages", "total_count": len(ids),
                          "messages": [msg(i, ago=(self.total - i) * 60) for i in ids],
                          "@extra": req["@extra"]}]

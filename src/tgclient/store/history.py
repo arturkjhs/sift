@@ -5,6 +5,11 @@ of the model (visually on top), so loading history doesn't shift what the user i
 
 Mutations go through a HistoryListener so a Qt model can wrap them in begin/end calls:
 the listener must call `commit()` exactly once between its begin and end notifications.
+
+The loaded window may stop short of the newest message (`reached_end` False) after
+`load_around()` (opening on the first unread message, jumping to an old one): newer pages then
+come from `load_newer()`, and live messages past the window are not inserted (they would leave
+a gap) until `load_latest()` brings the newest page back.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ class HistoryListener(Protocol):
     def history_insert(self, row: int, count: int, commit: Commit) -> None: ...
     def history_remove(self, row: int, count: int, commit: Commit) -> None: ...
     def history_changed(self, row: int) -> None: ...
+    def history_reset(self, commit: Commit) -> None: ...
 
 
 class _CommitOnly:
@@ -41,18 +47,26 @@ class _CommitOnly:
     def history_changed(self, row: int) -> None:
         pass
 
+    def history_reset(self, commit: Commit) -> None:
+        commit()
+
 
 class ChatHistory:
     PAGE = 50
 
     def __init__(
-        self, client: TdClient, chat_id: int, listener: HistoryListener | None = None
+        self, client: TdClient, chat_id: int, listener: HistoryListener | None = None,
+        last_message_id: Callable[[], int] | None = None,
     ) -> None:
+        """`last_message_id`: the chat's newest message (ChatStore), to know when a window
+        loaded around an old message has reached it; without it, a short page means so."""
         self._client = client
         self.chat_id = chat_id
+        self._last_message_id = last_message_id or (lambda: 0)
         self.messages: list[Message] = []
         self._keys: list[int] = []  # -message_id, ascending == newest first
         self.reached_start = False
+        self.reached_end = True  # the newest message is loaded (or nothing is yet)
         self.loading = False
         self._listener: HistoryListener = listener or _CommitOnly()
         self._replies: dict[int, Message] = {}  # replied-to message id -> message
@@ -150,6 +164,80 @@ class ChatHistory:
         finally:
             self.loading = False
 
+    async def load_around(self, message_id: int) -> bool:
+        """Replace the window with messages around `message_id` (it and older, plus up to half
+        a page newer). Returns whether the message is loaded."""
+        while self.loading:  # a page requested by the view is in flight
+            await asyncio.sleep(0.02)
+        self.loading = True
+        try:
+            newer = self.PAGE // 2
+            batch: list[Message] = []
+            for _ in range(3):  # like load_initial: the first answer may be only the cache
+                batch = await self._fetch(message_id, offset=-newer, keep_from=True)
+                if self._disposed:
+                    return False
+                if len(batch) >= self.PAGE // 2 or any(m["id"] == message_id for m in batch):
+                    break
+            fresh = sorted({m["id"]: m for m in batch}.values(), key=lambda m: m["id"],
+                           reverse=True)
+
+            def commit() -> None:
+                self.messages = fresh
+                self._keys = [-m["id"] for m in fresh]
+                self.reached_start = False
+                self.reached_end = self._at_end(fresh, sum(m["id"] > message_id for m in fresh)
+                                                < newer)
+
+            self._listener.history_reset(commit)
+            return self.row_of(message_id) >= 0
+        finally:
+            self.loading = False
+
+    async def load_newer(self) -> None:
+        """The next page towards the newest message, when the window stops short of it."""
+        if self.loading or self.reached_end or not self.messages:
+            return
+        self.loading = True
+        try:
+            newest = self.messages[0]["id"]
+            batch = await self._fetch(newest, offset=-self.PAGE, limit=self.PAGE + 1)
+            if self._disposed:
+                return
+            fresh = sorted((m for m in batch if m["id"] > newest and self.row_of(m["id"]) < 0),
+                           key=lambda m: m["id"], reverse=True)
+            if self._at_end(fresh or self.messages[:1], len(fresh) < self.PAGE):
+                self.reached_end = True
+            if fresh:
+                def commit() -> None:
+                    self.messages[:0] = fresh
+                    self._keys[:0] = [-m["id"] for m in fresh]
+
+                self._listener.history_insert(0, len(fresh), commit)
+                self._listener.history_changed(len(fresh))  # boundary row's grouping
+        finally:
+            self.loading = False
+
+    def _at_end(self, newest_first: list[Message], short_page: bool) -> bool:
+        last = self._last_message_id()
+        if last and newest_first:
+            return newest_first[0]["id"] >= last
+        return short_page
+
+    async def load_latest(self) -> None:
+        """Back to the newest page (after load_around), e.g. before sending."""
+        if self.reached_end:
+            return
+        while self.loading:
+            await asyncio.sleep(0.02)
+
+        def commit() -> None:
+            self.messages, self._keys = [], []
+            self.reached_start, self.reached_end = False, True
+
+        self._listener.history_reset(commit)
+        await self.load_initial()
+
     async def load_until(self, message_id: int, max_pages: int = 40) -> bool:
         """Page older history until `message_id` is loaded. Returns whether it is."""
         pages = 0
@@ -164,16 +252,19 @@ class ChatHistory:
             await (self.load_older() if self.messages else self.load_initial())
         return True
 
-    async def _fetch(self, from_id: int) -> list[Message]:
+    async def _fetch(self, from_id: int, offset: int = 0, limit: int = 0,
+                     keep_from: bool = False) -> list[Message]:
+        """A page of history from `from_id` (older; with a negative offset also newer)."""
         try:
             result = await self._client.send({
-                "@type": "getChatHistory", "chat_id": self.chat_id,
-                "from_message_id": from_id, "offset": 0, "limit": self.PAGE, "only_local": False,
+                "@type": "getChatHistory", "chat_id": self.chat_id, "from_message_id": from_id,
+                "offset": offset, "limit": limit or self.PAGE, "only_local": False,
             })
         except TdError as e:
             log.warning("getChatHistory(%s, %s) failed: %s", self.chat_id, from_id, e)
             return []
-        return [m for m in result.get("messages") or [] if m and m["id"] != from_id]
+        return [m for m in result.get("messages") or []
+                if m and (keep_from or m["id"] != from_id)]
 
     async def _fetch_reply(self, message_id: int, target_id: int) -> None:
         try:
@@ -250,9 +341,14 @@ class ChatHistory:
 
     # --- update handlers --------------------------------------------------------------------
 
+    def _past_window(self, message: Message) -> bool:
+        """Newer than the loaded window that stops short of the newest message."""
+        return not self.reached_end and bool(self.messages) and (
+            message["id"] > self.messages[0]["id"])
+
     def _on_new_message(self, event: Event) -> None:
         message = event["message"]
-        if message.get("chat_id") == self.chat_id:
+        if message.get("chat_id") == self.chat_id and not self._past_window(message):
             self._insert(message)
 
     def _on_send_result(self, event: Event) -> None:
@@ -260,7 +356,8 @@ class ChatHistory:
         if message.get("chat_id") != self.chat_id:
             return
         self._remove(event["old_message_id"])
-        self._insert(message)
+        if not self._past_window(message):
+            self._insert(message)
 
     def _on_content(self, event: Event) -> None:
         if event.get("chat_id") != self.chat_id:

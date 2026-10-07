@@ -28,3 +28,4 @@ DigestDialog 1.0 DigestDialog.qml
 AccountSwitcher 1.0 AccountSwitcher.qml
 MediaViewer 1.0 MediaViewer.qml
 ReactionPicker 1.0 ReactionPicker.qml
+JumpButton 1.0 JumpButton.qml

@@ -129,6 +129,18 @@ class FakeEmbedder:
         return self._vector(text)
 
 
+def history_ids(all_ids: list[int], req: dict[str, Any]) -> list[int]:
+    """Ids (newest first) getChatHistory returns from a chat with `all_ids`: from
+    from_message_id (0: the newest) older, plus up to -offset newer ones, `limit` in total."""
+    ids = sorted(all_ids, reverse=True)
+    start, offset, limit = req["from_message_id"], req.get("offset", 0), req["limit"]
+    if not start:
+        return ids[:limit]
+    newer = [i for i in ids if i > start][::-1][:-offset][::-1] if offset < 0 else []
+    older = [i for i in ids if i < start or (offset < 0 and i == start)]
+    return (newer + older)[:limit]
+
+
 def ok(req: dict[str, Any], **fields: Any) -> dict[str, Any]:
     return {"@type": "ok", **fields, "@extra": req["@extra"]}
 

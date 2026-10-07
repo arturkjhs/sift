@@ -15,6 +15,7 @@ from fakes import (
     FakeRouter,
     auth_state,
     error,
+    history_ids,
     new_chat,
     ok,
     qt_app,
@@ -43,9 +44,8 @@ PHOTO_PATH = os.path.join(tempfile.gettempdir(), "tgc-test-photo.png")
 
 
 def _long_history(req: dict[str, Any]) -> list[dict[str, Any]]:
-    """Chat 4: 80 messages, read up to 40 (opens on the separator, not at the bottom)."""
-    start = req["from_message_id"] or 81
-    ids = [i for i in range(start - 1, start - 1 - req["limit"], -1) if i >= 1]
+    """Chat 4: 300 messages, read up to 40 (opens on the separator, not at the bottom)."""
+    ids = history_ids(list(range(1, 301)), req)
     messages = [{**_msg(i, f"Message number {i} " + "word " * (i % 7)), "chat_id": LONG_CHAT,
                  "date": 1_700_000_000 + i * 60} for i in ids]
     return [{"@type": "messages", "total_count": len(ids), "messages": messages,
@@ -118,7 +118,7 @@ def responder(req: dict[str, Any]) -> list[dict[str, Any]]:
                     new_chat(1, "Olena", 300, unread_count=2),
                     new_chat(2, "Prague IT", 200, "chatTypeSupergroup"),
                     new_chat(LONG_CHAT, "Book club", 100, "chatTypeSupergroup",
-                             unread_count=40, last_read_inbox_message_id=40),
+                             unread_count=260, last_read_inbox_message_id=40),
                     ok(req)]
         case "loadChats":
             return [error(req, 404, "Not Found")]
@@ -656,6 +656,21 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
                         f"separator at {top}, list height {message_list.height()}")
         _screenshot(window, "unread")
         self.assertEqual(warnings, [], "QML warnings with the unread separator")
+        # opened around the separator: "down" shows the unread count, mentions get "@"
+        self.assertFalse(session.messages.atLatest)
+        session.client._dispatch({"@type": "updateChatUnreadMentionCount",
+                                  "chat_id": LONG_CHAT, "unread_mention_count": 3})
+        await settle(0.1)
+        latest_jump = find_item(window.contentItem(), "latestJump")
+        mention_jump = find_item(window.contentItem(), "mentionJump")
+        self.assertTrue(latest_jump.isVisible() and mention_jump.isVisible())
+        self.assertEqual(latest_jump.property("count"), 260)
+        self.assertEqual(mention_jump.property("count"), 3)
+        _screenshot(window, "jump-buttons")
+        QMetaObject.invokeMethod(latest_jump, "clicked")
+        await wait_until(lambda: (pump(), session.messages.atLatest)[1]
+                         and session.messages.rowOf(300) >= 0)
+        self.assertEqual(warnings, [], "QML warnings with the jump buttons")
 
         settings_dialog = window.findChild(QObject, "settingsDialog")
         QMetaObject.invokeMethod(settings_dialog, "open")

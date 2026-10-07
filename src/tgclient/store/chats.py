@@ -69,6 +69,7 @@ class Chat:
     type: str  # private | secret | group | supergroup | channel
     unread_count: int = 0
     unread_mention_count: int = 0
+    unread_reaction_count: int = 0
     positions: dict[str, Position] = field(default_factory=dict)
     last_message: dict[str, Any] | None = None
     photo_file_id: int | None = None
@@ -116,6 +117,8 @@ class ChatStore:
             "updateChatUnreadMentionCount": self._on_mention_count,
             # Reading a message with a mention sends this one, not the update above.
             "updateMessageMentionRead": self._on_mention_count,
+            "updateChatUnreadReactionCount": self._on_reaction_count,
+            "updateMessageUnreadReactions": self._on_reaction_count,
             "updateChatNotificationSettings": self._on_notification_settings,
             "updateScopeNotificationSettings": self._on_scope_settings,
             "updateChatFolders": self._on_folders,
@@ -231,6 +234,7 @@ class ChatStore:
             type=_chat_type(raw["type"]),
             unread_count=raw.get("unread_count", 0),
             unread_mention_count=raw.get("unread_mention_count", 0),
+            unread_reaction_count=raw.get("unread_reaction_count", 0),
             last_message=raw.get("last_message"),
             last_read_outbox_message_id=raw.get("last_read_outbox_message_id", 0),
             last_read_inbox_message_id=raw.get("last_read_inbox_message_id", 0),
@@ -293,6 +297,12 @@ class ChatStore:
         self._update_chat(
             event["chat_id"],
             lambda c: setattr(c, "unread_mention_count", event["unread_mention_count"]),
+        )
+
+    def _on_reaction_count(self, event: Event) -> None:
+        self._update_chat(
+            event["chat_id"],
+            lambda c: setattr(c, "unread_reaction_count", event["unread_reaction_count"]),
         )
 
     def _on_notification_settings(self, event: Event) -> None:
