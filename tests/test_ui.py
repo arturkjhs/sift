@@ -746,6 +746,26 @@ class QmlSmokeTest(unittest.IsolatedAsyncioTestCase):
                          and session.messages.rowOf(300) >= 0)
         self.assertEqual(warnings, [], "QML warnings with the jump buttons")
 
+        # The chat list's context menu, and the confirmation before leaving
+        chat_menu = window.findChild(QObject, "chatMenu")
+        QMetaObject.invokeMethod(chat_menu, "openFor", Q_ARG("QVariant", 2),
+                                 Q_ARG("QVariant", "Prague IT"))
+        await settle()
+        self.assertTrue(chat_menu.property("opened"))
+        _screenshot(window, "chat-menu")
+        QMetaObject.invokeMethod(chat_menu, "close")
+        await settle(0.15)
+        confirm = window.findChild(QObject, "confirmDialog")
+        QMetaObject.invokeMethod(confirm, "ask", Q_ARG("QVariant", "Leave \u201cPrague IT\u201d?"),
+                                 Q_ARG("QVariant", ""), Q_ARG("QVariant", "Leave"),
+                                 Q_ARG("QVariant", ""), Q_ARG("QVariant", {}))
+        await settle()
+        self.assertTrue(confirm.property("opened"))
+        _screenshot(window, "confirm-leave")
+        QMetaObject.invokeMethod(confirm, "close")
+        await settle(0.15)
+        self.assertEqual(warnings, [], "QML warnings in the chat menu")
+
         settings_dialog = window.findChild(QObject, "settingsDialog")
         QMetaObject.invokeMethod(settings_dialog, "open")
         await settle()

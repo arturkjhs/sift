@@ -131,11 +131,11 @@
 
 ## P2. Комфорт
 
-- [ ] **Меню чата в списке:** закрепить, mute на время, в архив, отметить прочитанным /
+- [x] **Меню чата в списке:** закрепить, mute на время, в архив, отметить прочитанным /
   непрочитанным, очистить историю, выйти (`toggleChatIsPinned`, `setChatNotificationSettings`,
   `addChatToList`, `toggleChatIsMarkedAsUnread`, `deleteChatHistory`, `leaveChat`).
   **проверить** — может быть частично сделано.
-  *Проверено:* не сделано (ни одного из этих методов TDLib в коде).
+  → `ui/chat_actions.py` (`chatActions`), меню `chatMenu` в `MainView.qml`, `ConfirmDialog.qml`, точка «отмечен непрочитанным».
 - [x] **«Печатает…» и онлайн.** `updateChatAction` → шапка и превью в списке;
   `sendChatAction` при наборе; `updateUserStatus` → «был(а) …» в шапке лички.
   **проверить** онлайн в шапке лички.

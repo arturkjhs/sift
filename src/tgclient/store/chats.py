@@ -80,6 +80,9 @@ class Chat:
     last_read_inbox_message_id: int = 0
     peer_id: int = 0  # user id (private, secret), basic group id or supergroup id
     draft: dict[str, Any] | None = None  # TDLib draftMessage
+    is_marked_as_unread: bool = False
+    notification_settings: dict[str, Any] = field(default_factory=dict)  # TDLib, as is
+    can_delete_for_all: bool = False  # private chats: clear history for both sides
 
 
 @dataclass
@@ -118,6 +121,7 @@ class ChatStore:
             # Reading a message with a mention sends this one, not the update above.
             "updateMessageMentionRead": self._on_mention_count,
             "updateChatUnreadReactionCount": self._on_reaction_count,
+            "updateChatIsMarkedAsUnread": self._on_marked_unread,
             "updateMessageUnreadReactions": self._on_reaction_count,
             "updateChatNotificationSettings": self._on_notification_settings,
             "updateScopeNotificationSettings": self._on_scope_settings,
@@ -223,6 +227,7 @@ class ChatStore:
             chat.positions[key] = Position(order=order, is_pinned=position.get("is_pinned", False))
 
     def _apply_notification_settings(self, chat: Chat, settings: dict[str, Any]) -> None:
+        chat.notification_settings = dict(settings)
         chat.mute_for = settings.get("mute_for", 0)
         chat.use_default_mute_for = settings.get("use_default_mute_for", True)
 
@@ -240,6 +245,8 @@ class ChatStore:
             last_read_inbox_message_id=raw.get("last_read_inbox_message_id", 0),
             peer_id=_peer_id(raw["type"]),
             draft=raw.get("draft_message"),
+            is_marked_as_unread=bool(raw.get("is_marked_as_unread")),
+            can_delete_for_all=bool(raw.get("can_be_deleted_for_all_users")),
         )
         self.chats[chat.id] = chat
         self._set_photo(chat, raw.get("photo"))
@@ -297,6 +304,12 @@ class ChatStore:
         self._update_chat(
             event["chat_id"],
             lambda c: setattr(c, "unread_mention_count", event["unread_mention_count"]),
+        )
+
+    def _on_marked_unread(self, event: Event) -> None:
+        self._update_chat(
+            event["chat_id"],
+            lambda c: setattr(c, "is_marked_as_unread", bool(event["is_marked_as_unread"])),
         )
 
     def _on_reaction_count(self, event: Event) -> None:

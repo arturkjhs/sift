@@ -48,6 +48,7 @@ class Role(IntEnum):
     Draft = auto()
     Typing = auto()
     Online = auto()
+    MarkedUnread = auto()  # "mark as unread" without unread messages: a dot
 
 
 class ChatListModel(QAbstractListModel):
@@ -143,6 +144,8 @@ class ChatListModel(QAbstractListModel):
                     return ""
                 return typing_text(self._presence.typing.get(chat.id, []), self._name,
                                    chat.type in ("private", "secret"))
+            case Role.MarkedUnread:
+                return chat.is_marked_as_unread and chat.unread_count == 0
             case Role.Online:
                 return (self._presence is not None and chat.type == "private"
                         and chat.peer_id != self._users.my_id

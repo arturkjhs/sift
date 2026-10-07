@@ -412,6 +412,12 @@ src/tgclient/
   шаг — `chatSearchJump(id)` → `showMessage`. Совпадения в тексте подсвечивает
   `richtext.highlight_html` (только вне тегов; метка времени вставляется после — через
   `_TAIL`-заглушку, иначе подсвечивались бы её цифры).
+- Меню чата в списке (правый клик): `ChatActions` (`chatActions` в QML) — закрепить
+  (`toggleChatIsPinned` в текущем списке), mute на 1 ч / 8 ч / 2 дня / навсегда
+  (`setChatNotificationSettings`: полный объект настроек чата из `Chat.notification_settings`,
+  меняется только `mute_for`), архив (`addChatToList`), прочитано (`viewMessages` последнего +
+  `readAllChatMentions`) / непрочитано (`toggleChatIsMarkedAsUnread`, точка в списке),
+  очистить историю и выйти/удалить через `ConfirmDialog` («также для …» — `revoke`).
 - Закрепы: `store/pinned.py` (`PinnedMessages`, Qt-free) грузит все закреплённые
   (`searchChatMessages` с `searchMessagesFilterPinned`, запасной — `getChatPinnedMessage`) и
   обновляется по `updateMessageIsPinned`/удалениям. Полоса под шапкой показывает одно; клик —

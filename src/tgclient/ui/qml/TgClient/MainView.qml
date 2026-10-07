@@ -220,6 +220,7 @@ SplitView {
                         root.selectedChatId = chatId
                         messages.open(chatId)
                     }
+                    onMenuRequested: chatMenu.openFor(chatId, title)
                 }
 
                 // A chat that gets a new message slides to its new place instead of jumping.
@@ -249,6 +250,119 @@ SplitView {
     DigestDialog {
         id: digestDialog
         onMessageRequested: (chatId, messageId) => root.openChat(chatId, messageId)
+    }
+
+    // Right click on a chat in the list.
+    AppMenu {
+        id: chatMenu
+        objectName: "chatMenu"
+        property var chatId: 0
+        property string chatTitle: ""
+        property var info: ({})
+        readonly property bool group: info.type === "group" || info.type === "supergroup"
+
+        function openFor(chatId, title) {
+            chatMenu.chatId = chatId
+            chatMenu.chatTitle = title
+            chatMenu.info = chatActions.state(chatId)
+            popup()
+        }
+
+        AppMenuItem {
+            text: chatMenu.info.pinned ? qsTr("Unpin") : qsTr("Pin")
+            iconName: "pin"
+            onTriggered: chatActions.setPinned(chatMenu.chatId, chatList.listKey,
+                                               !chatMenu.info.pinned)
+        }
+        AppMenuItem {
+            text: chatMenu.info.unread ? qsTr("Mark as read") : qsTr("Mark as unread")
+            iconName: "check"
+            onTriggered: chatActions.setUnread(chatMenu.chatId, !chatMenu.info.unread)
+        }
+        AppMenuItem {
+            text: chatMenu.info.archived ? qsTr("Unarchive") : qsTr("Archive")
+            iconName: "inbox"
+            onTriggered: chatActions.setArchived(chatMenu.chatId, !chatMenu.info.archived)
+        }
+        AppMenuSeparator {}
+        AppMenuItem {
+            visible: chatMenu.info.muted === true
+            text: qsTr("Unmute")
+            iconName: "bell"
+            onTriggered: chatActions.mute(chatMenu.chatId, 0)
+        }
+        AppMenuItem {
+            visible: chatMenu.info.muted === false
+            text: qsTr("Mute for 1 hour")
+            iconName: "bell"
+            onTriggered: chatActions.mute(chatMenu.chatId, 3600)
+        }
+        AppMenuItem {
+            visible: chatMenu.info.muted === false
+            text: qsTr("Mute for 8 hours")
+            iconName: "bell"
+            onTriggered: chatActions.mute(chatMenu.chatId, 8 * 3600)
+        }
+        AppMenuItem {
+            visible: chatMenu.info.muted === false
+            text: qsTr("Mute for 2 days")
+            iconName: "bell"
+            onTriggered: chatActions.mute(chatMenu.chatId, 2 * 86400)
+        }
+        AppMenuItem {
+            visible: chatMenu.info.muted === false
+            text: qsTr("Mute forever")
+            iconName: "bell"
+            onTriggered: chatActions.mute(chatMenu.chatId, -1)
+        }
+        AppMenuSeparator {}
+        AppMenuItem {
+            visible: chatMenu.info.type !== "channel"
+            text: qsTr("Clear history")
+            iconName: "trash"
+            danger: true
+            onTriggered: confirmDialog.ask(
+                qsTr("Clear the history of \u201c%1\u201d?").arg(chatMenu.chatTitle), "",
+                qsTr("Clear"),
+                chatMenu.info.canDeleteForAll ? qsTr("Also for %1").arg(chatMenu.chatTitle) : "",
+                {action: "clear", chatId: chatMenu.chatId})
+        }
+        AppMenuItem {
+            text: chatMenu.info.type === "channel" ? qsTr("Leave channel")
+                  : chatMenu.group ? qsTr("Leave group") : qsTr("Delete chat")
+            iconName: "close"
+            danger: true
+            onTriggered: confirmDialog.ask(
+                chatMenu.group || chatMenu.info.type === "channel"
+                    ? qsTr("Leave \u201c%1\u201d?").arg(chatMenu.chatTitle)
+                    : qsTr("Delete the chat with %1?").arg(chatMenu.chatTitle), "",
+                chatMenu.group || chatMenu.info.type === "channel" ? qsTr("Leave")
+                                                                  : qsTr("Delete"),
+                !chatMenu.group && chatMenu.info.canDeleteForAll
+                    ? qsTr("Also for %1").arg(chatMenu.chatTitle) : "",
+                {action: "leave", chatId: chatMenu.chatId})
+        }
+    }
+
+    ConfirmDialog {
+        id: confirmDialog
+        objectName: "confirmDialog"
+        onAccepted: (checked, payload) => {
+            if (payload.action === "clear")
+                chatActions.clearHistory(payload.chatId, checked)
+            else
+                chatActions.leave(payload.chatId, checked)
+        }
+    }
+
+    Connections {
+        target: chatActions
+        function onLeft(chatId) {
+            if (chatId === root.selectedChatId) {
+                root.selectedChatId = 0
+                messages.close()
+            }
+        }
     }
 
     Rectangle {

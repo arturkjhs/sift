@@ -18,15 +18,21 @@ Rectangle {
     required property string draft
     required property string typing
     required property bool online
+    required property bool markedUnread
 
     property bool selected: false
     signal clicked()
+    signal menuRequested()
 
     implicitHeight: 64
     color: selected ? Theme.selection : hover.hovered ? Theme.hover : "transparent"
 
     HoverHandler { id: hover }
     TapHandler { onTapped: row.clicked() }
+    TapHandler {
+        acceptedButtons: Qt.RightButton
+        onTapped: row.menuRequested()
+    }
 
     component Badge: Rectangle {
         property alias label: badgeText.text
@@ -126,6 +132,14 @@ Rectangle {
             visible: row.mentionCount > 0
             label: "@"
             color: Theme.accent
+        }
+
+        Badge {  // marked as unread by hand
+            objectName: "markedUnread"
+            visible: row.markedUnread
+            width: 20
+            label: ""
+            color: row.muted ? Theme.badgeMuted : Theme.accent
         }
 
         Badge {
