@@ -8,8 +8,17 @@ Item {
     property var replyToId: 0
     property bool summaryOpen: false
     property bool profileOpen: false
-    onSummaryOpenChanged: if (summaryOpen) profileOpen = false
-    onProfileOpenChanged: if (profileOpen) summaryOpen = false
+    property bool personMessagesOpen: false
+    // One side panel at a time.
+    onSummaryOpenChanged: if (summaryOpen) { profileOpen = false; personMessagesOpen = false }
+    onProfileOpenChanged: if (profileOpen) { summaryOpen = false; personMessagesOpen = false }
+    onPersonMessagesOpenChanged: if (personMessagesOpen) { summaryOpen = false; profileOpen = false }
+
+    // "Messages from <name>" in the open chat.
+    function showPersonMessages(chatId, senderKey, name) {
+        personMessages.open(chatId, senderKey, name)
+        root.personMessagesOpen = true
+    }
 
     function showProfile(chatId, userId) {
         profile.open(chatId, userId)
@@ -39,6 +48,7 @@ Item {
                 root.loadDraft(composerModel.draftText, composerModel.draftReplyTo)
                 root.summaryOpen = false
                 root.profileOpen = false
+                root.personMessagesOpen = false
                 composer.focusInput()
             }
         }
@@ -623,6 +633,26 @@ Item {
                 onPersonRequested: userId => messages.openLink("tg://user?id=" + userId)
                 onSearchRequested: root.openSearch()
                 onAddMembersRequested: chatId => addMembersDialog.start("add", chatId)
+                onPersonMessagesRequested: (chatId, senderKey, name) =>
+                                           root.showPersonMessages(chatId, senderKey, name)
+            }
+
+            Rectangle {
+                Layout.fillHeight: true
+                implicitWidth: 1
+                visible: personPanel.visible
+                color: Theme.separator
+            }
+
+            PersonMessagesPanel {
+                id: personPanel
+                Layout.fillHeight: true
+                Layout.preferredWidth: Math.min(360, root.width * 0.42)
+                visible: root.personMessagesOpen
+                onCloseRequested: root.personMessagesOpen = false
+                onMessageRequested: (chatId, messageId) => chatId === messages.chatId
+                                    ? root.showMessage(messageId)
+                                    : root.openChatRequested(chatId, messageId)
             }
 
             SummaryPanel {
@@ -1775,6 +1805,13 @@ Item {
                 root.replyToId = personMenu.messageId
                 composer.focusInput()
             }
+        }
+        AppMenuItem {
+            objectName: "personMessagesItem"
+            text: qsTr("Messages from %1").arg(personMenu.senderName)
+            iconName: "search"
+            onTriggered: root.showPersonMessages(messages.chatId, personMenu.senderKey,
+                                                 personMenu.senderName)
         }
         AppMenuItem {
             objectName: "viewProfileItem"

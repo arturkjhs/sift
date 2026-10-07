@@ -15,6 +15,7 @@ Rectangle {
     signal personRequested(var userId)
     signal searchRequested()
     signal addMembersRequested(var chatId)
+    signal personMessagesRequested(var chatId, string senderKey, string name)
 
     // My role in the group or channel (owner / admin / member / ""), and its invite link.
     readonly property string myRole: (groupAdmin.revision, profile.isUser ? ""
@@ -414,12 +415,14 @@ Rectangle {
                 }
 
                 // What was shared in the chat.
-                RowLayout {
+                Flow {  // the tabs wrap in a narrow panel
                     visible: profile.chatId !== 0
+                    Layout.fillWidth: true
                     Layout.topMargin: 8
                     spacing: 4
                     Repeater {
                         model: [
+                            { key: "messages", label: qsTr("Messages") },
                             { key: "media", label: qsTr("Media") },
                             { key: "files", label: qsTr("Files") },
                             { key: "links", label: qsTr("Links") },
@@ -428,8 +431,16 @@ Rectangle {
                         PillButton {
                             required property var modelData
                             text: modelData.label
+                            visible: modelData.key !== "messages" || profile.isUser
                             filled: profile.tab === modelData.key
-                            onClicked: profile.setTab(modelData.key)
+                            // Messages: the person's own messages, in the side panel; in a
+                            // group, there; otherwise in the private chat.
+                            onClicked: modelData.key === "messages"
+                                ? root.personMessagesRequested(
+                                      messages.chatType === "group" || messages.chatType === "supergroup"
+                                      ? messages.chatId : profile.chatId,
+                                      "user:" + profile.userId, profile.title)
+                                : profile.setTab(modelData.key)
                         }
                     }
                 }

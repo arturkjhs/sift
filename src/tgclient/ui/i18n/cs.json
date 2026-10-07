@@ -480,5 +480,8 @@
 "Ask": "Zeptat se",
 "Loading topics": "Načítání témat",
 "All chats": "Všechny chaty",
-"Language": "Jazyk"
+"Language": "Jazyk",
+"Messages from %1": "Zprávy od %1",
+"Messages on behalf of %1": "Zprávy jménem %1",
+"Search their messages": "Hledat v jejich zprávách"
 }

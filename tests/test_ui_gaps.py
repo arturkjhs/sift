@@ -43,6 +43,12 @@ class Server(test_forums.Server):
                 return [{"@type": "error", "code": 404, "message": "Not Found", "@extra": extra}]
             case "getChatHistory":
                 return [{"@type": "messages", "total_count": 0, "messages": [], "@extra": extra}]
+            case "searchChatMessages" if req.get("sender_id"):
+                query = req["query"].lower()
+                found = [MESSAGES[i] for i in sorted(MESSAGES, reverse=True)
+                         if query in MESSAGES[i]["content"]["text"]["text"].lower()][:20]
+                return [{"@type": "foundChatMessages", "total_count": len(found),
+                         "messages": found, "next_from_message_id": 0, "@extra": extra}]
             case "searchChatMessages":
                 return [{"@type": "foundChatMessages", "total_count": 0, "messages": [],
                          "next_from_message_id": 0, "@extra": extra}]
@@ -365,6 +371,29 @@ class GapsViewsTest(unittest.IsolatedAsyncioTestCase):
             shell.setLanguage("en")
         await self.settle(0.1)
         self.assertEqual(self.warnings, [], "QML warnings when switching languages")
+
+
+    async def test_person_messages_panel(self) -> None:
+        from PySide6.QtCore import QMetaObject, Q_ARG
+
+        self.open_chat(FORUM)
+        await self.forums_loaded()
+        view = self.item("messageView")
+        QMetaObject.invokeMethod(view, "showPersonMessages", Q_ARG("QVariant", FORUM),
+                                 Q_ARG("QVariant", "user:5"), Q_ARG("QVariant", "Olena"))
+        await wait_until(lambda: (self.pump(), self.session.person_messages.count)[1] == 20)
+        await self.settle()
+        self.assertTrue(self.item("personMessagesPanel").isVisible())
+        _screenshot(self.window, "person-messages")
+        self.session.person_messages.setProperty("query", "m5")
+        await wait_until(lambda: (self.pump(), self.session.person_messages.count)[1] < 20
+                         and not self.session.person_messages.busy)
+        await self.settle()
+        _screenshot(self.window, "person-messages-query")
+        self.assertEqual(self.warnings, [], "QML warnings in the person messages panel")
+
+    async def forums_loaded(self) -> None:
+        await wait_until(lambda: (self.pump(), self.session.topics.rowCount())[1] == 2)
 
 
 if __name__ == "__main__":

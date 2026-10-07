@@ -25,6 +25,7 @@ from .models.emoji import EmojiModel
 from .models.folders import FolderModel
 from .models.gifs import GifModel
 from .models.messages import MessageListModel
+from .models.person_messages import PersonMessagesModel
 from .models.profile import ProfileModel
 from .models.search import SearchModel
 from .models.stickers import StickerModel
@@ -35,6 +36,7 @@ from .services.ai import AiService
 from .services.ai_store import AiStore
 from .services.embeddings import Embedder, FastEmbedder, semantic_available
 from .services.openrouter import OpenRouter, mask_key
+from .services.person_search import PersonSearch
 from .services.search import SearchService
 from .services.search_index import SearchIndex
 from .services.updates import UpdateChecker
@@ -142,6 +144,9 @@ class Session:
         self.chat_list = ChatListModel(self.chats, self.users, self.presence)
         self.chat_actions = ChatActions(self.client, self.chats)
         self.profile = ProfileModel(self.client, self.chats, self.users, self.presence)
+        self.person_search = PersonSearch(self.client, self.chats)
+        self.person_messages = PersonMessagesModel(self.person_search, self.chats, self.users,
+                                                   self.forums)
         self.devices = DevicesController(self.client)
         self.folder_editor = FolderEditor(self.client, self.chats)
         self.contacts = ContactsModel(self.client, self.users, self.files, self.presence)
@@ -422,6 +427,7 @@ def bind_session(engine: QQmlApplicationEngine, images: TdImageProvider,
     context.setContextProperty("chatList", session.chat_list)
     context.setContextProperty("chatActions", session.chat_actions)
     context.setContextProperty("profile", session.profile)
+    context.setContextProperty("personMessages", session.person_messages)
     context.setContextProperty("devices", session.devices)
     context.setContextProperty("folderEditor", session.folder_editor)
     context.setContextProperty("contacts", session.contacts)

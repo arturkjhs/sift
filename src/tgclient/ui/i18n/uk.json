@@ -480,5 +480,8 @@
 "Ask": "Запитати",
 "Loading topics": "Завантаження тем",
 "All chats": "Усі чати",
-"Language": "Мова"
+"Language": "Мова",
+"Messages from %1": "Повідомлення від %1",
+"Messages on behalf of %1": "Повідомлення від імені %1",
+"Search their messages": "Пошук у їхніх повідомленнях"
 }
