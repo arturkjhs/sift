@@ -33,6 +33,7 @@ class Media:
     waveform: bytes = b""
     emoji: str = ""
     format: str = ""  # stickers: webp | tgs | webm
+    animated_emoji: bool = False  # a one-emoji message: drawn smaller than a sticker
 
 
 def extract(content: dict[str, Any]) -> Media | None:
@@ -50,6 +51,14 @@ def extract(content: dict[str, Any]) -> Media | None:
             return media
         case "messageSticker":
             return _sticker(content.get("sticker") or {})
+        case "messageAnimatedEmoji":
+            animated = content.get("animated_emoji") or {}
+            if not animated.get("sticker"):
+                return None
+            media = _sticker(animated["sticker"])
+            media.emoji = media.emoji or content.get("emoji", "")
+            media.animated_emoji = True
+            return media
         case "messageDocument":
             doc = content.get("document") or {}
             return Media(

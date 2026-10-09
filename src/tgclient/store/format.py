@@ -47,6 +47,8 @@ def content_preview(content: dict[str, Any]) -> str:
         case "messageSticker":
             emoji = content.get("sticker", {}).get("emoji", "")
             return f"{emoji} Sticker".strip()
+        case "messageAnimatedEmoji" | "messageDice":
+            return content.get("emoji", "")
         case "messageLocation" | "messageVenue":
             return "Location"
         case "messageContact":
@@ -86,8 +88,8 @@ def is_service(content: dict[str, Any]) -> bool:
 
 def media_label(content: dict[str, Any]) -> str:
     """Label for non-text content shown above the caption ("Photo", "Voice message", ...)."""
-    if content.get("@type") in ("messageText", None):
-        return ""
+    if content.get("@type") in ("messageText", "messageAnimatedEmoji", None):
+        return ""  # an animated emoji is its sticker or, without one, the emoji as text
     label = content_preview({k: v for k, v in content.items() if k != "caption"})
     return label
 
@@ -96,6 +98,11 @@ def message_body(content: dict[str, Any]) -> dict[str, Any] | None:
     """The formattedText to render in the bubble: text for text messages, caption otherwise."""
     if content.get("@type") == "messageText":
         return content.get("text")
+    if content.get("@type") == "messageAnimatedEmoji":
+        # Shown as a sticker when TDLib has one; otherwise the bubble shows the emoji itself.
+        if (content.get("animated_emoji") or {}).get("sticker"):
+            return None
+        return {"@type": "formattedText", "text": content.get("emoji", ""), "entities": []}
     caption = content.get("caption")
     return caption if isinstance(caption, dict) and caption.get("text") else None
 

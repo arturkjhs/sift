@@ -66,6 +66,27 @@ class ExtractTest(unittest.TestCase):
         self.assertEqual(animated.preview["id"], 22)
         self.assertEqual(animated.emoji, "🔥")
 
+    def test_animated_emoji(self) -> None:
+        from tgclient.store.format import content_preview, media_label, message_body
+        with_sticker = {"@type": "messageAnimatedEmoji", "emoji": "👍", "animated_emoji": {
+            "sticker": {"width": 512, "height": 512, "emoji": "👍",
+                        "format": {"@type": "stickerFormatTgs"}, "sticker": file(23),
+                        "thumbnail": None},
+            "sticker_width": 512, "sticker_height": 512}}
+        media = extract(with_sticker)
+        self.assertEqual((media.kind, media.format, media.file["id"]), ("sticker", "tgs", 23))
+        from tgclient.models.messages import ANIMATED_EMOJI_SIZE, _display_size
+        self.assertEqual(_display_size(media), (ANIMATED_EMOJI_SIZE, ANIMATED_EMOJI_SIZE))
+        self.assertIsNone(message_body(with_sticker))
+        self.assertEqual(content_preview(with_sticker), "👍")
+        self.assertEqual(media_label(with_sticker), "")
+        # TDLib may have no sticker for the emoji: the bubble shows the emoji as text.
+        bare = {"@type": "messageAnimatedEmoji", "emoji": "🫠",
+                "animated_emoji": {"sticker": None, "sticker_width": 512, "sticker_height": 512}}
+        self.assertIsNone(extract(bare))
+        self.assertEqual(message_body(bare)["text"], "🫠")
+        self.assertEqual(media_label(bare), "")
+
     def test_voice_and_document(self) -> None:
         voice = extract({"@type": "messageVoiceNote", "voice_note": {
             "duration": 7, "waveform": base64.b64encode(pack_waveform([1, 2, 3])).decode(),

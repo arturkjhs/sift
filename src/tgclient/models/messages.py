@@ -2435,10 +2435,14 @@ def _invite_map(info: dict[str, Any]) -> dict[str, Any]:
             "request": bool(info.get("creates_join_request"))}
 
 
+ANIMATED_EMOJI_SIZE = 96
+
+
 def _display_size(media: Media) -> tuple[int, int]:
     match media.kind:
         case "sticker":
-            return fit(media.width, media.height, 160, 160, min_side=60)
+            box = ANIMATED_EMOJI_SIZE if media.animated_emoji else 160
+            return fit(media.width, media.height, box, box, min_side=60)
         case "videoNote":
             return 200, 200
         case "photo" | "video" | "animation":
