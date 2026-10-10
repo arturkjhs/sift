@@ -73,11 +73,6 @@ def _tags(entity_type: dict[str, Any], segment: str, palette: Palette) -> tuple[
             # TODO: render Pre as a separate block with its own background
             mono = f"font-family:'{palette.mono}';background-color:{palette.code_background}"
             return f'<span style="{mono}">', "</span>"
-        case "textEntityTypeSpoiler":
-            return (
-                f'<span style="background-color:{palette.spoiler};color:{palette.spoiler}">',
-                "</span>",
-            )
         case "textEntityTypeBlockQuote" | "textEntityTypeExpandableBlockQuote":
             return "<i>", "</i>"  # TODO: proper quote block with a side bar
         case "textEntityTypeTextUrl":
@@ -98,18 +93,36 @@ def _tags(entity_type: dict[str, Any], segment: str, palette: Palette) -> tuple[
     return None  # custom emoji etc.: plain text (the fallback emoji is in the text)
 
 
+def _spoiler(palette: Palette, link: str) -> tuple[str, str]:
+    """Hidden text: painted over with the spoiler color; a link (tgc://spoiler/<id>) reveals
+    it on click. Without a link nothing would ever show it."""
+    hidden = f'<span style="background-color:{palette.spoiler};color:{palette.spoiler}">'
+    if not link:
+        return hidden, "</span>"
+    return (f'<a href="{_attr(link)}" style="text-decoration:none">{hidden}',
+            "</span></a>")
+
+
 def formatted_to_html(formatted: dict[str, Any] | None, palette: Palette, tail: str = "",
-                      custom_emoji: CustomEmoji | None = None) -> str:
+                      custom_emoji: CustomEmoji | None = None, spoiler_link: str = "",
+                      reveal_spoilers: bool = False) -> str:
     """Return HTML for a formattedText. `tail` is raw HTML appended at the end (time spacer).
-    `custom_emoji` turns custom emoji entities into inline images when their URL is known."""
+    `custom_emoji` turns custom emoji entities into inline images when their URL is known.
+    Spoilers stay hidden (clickable with `spoiler_link`) unless `reveal_spoilers`."""
     text = (formatted or {}).get("text", "")
     if not text and not tail:
         return ""
     index = utf16_index_map(text)
     limit = len(index) - 1
 
+    entities = (formatted or {}).get("entities", [])
+    hidden: list[tuple[int, int]] = []  # spoiler ranges in UTF-16 units
+    if not reveal_spoilers:
+        hidden = [(e.get("offset", 0), e.get("offset", 0) + e.get("length", 0))
+                  for e in entities if e.get("type", {}).get("@type") == "textEntityTypeSpoiler"]
+
     spans: list[_Span] = []
-    for entity in (formatted or {}).get("entities", []):
+    for entity in entities:
         offset = entity.get("offset", 0)
         length = entity.get("length", 0)
         if length <= 0 or offset < 0 or offset >= limit:
@@ -118,6 +131,12 @@ def formatted_to_html(formatted: dict[str, Any] | None, palette: Palette, tail: 
         if start >= end:
             continue
         entity_type = entity.get("type", {})
+        if entity_type.get("@type") == "textEntityTypeSpoiler":
+            if not reveal_spoilers:
+                spans.append(_Span(start, end, *_spoiler(palette, spoiler_link)))
+            continue
+        if any(a < offset + length and offset < b for a, b in hidden):
+            continue  # a link color or an emoji image inside a spoiler would give it away
         if entity_type.get("@type") == "textEntityTypeCustomEmoji" and custom_emoji:
             url = custom_emoji(str(entity_type.get("custom_emoji_id", "")))
             if url:

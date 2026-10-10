@@ -258,6 +258,21 @@ class MessageModelTest(HistoryCase):
                          "last_read_outbox_message_id": 7})
         self.assertEqual(self.role(0, self.Role.Status), "read")
 
+    async def test_click_on_spoiler_reveals_it(self) -> None:
+        await self.open_loaded()
+        await self.push({"@type": "updateNewMessage", "message": msg(7, sender=5, content={
+            "@type": "messageText", "text": {"text": "the answer is 42", "entities": [
+                {"offset": 14, "length": 2, "type": {"@type": "textEntityTypeSpoiler"}}]}})})
+        html = self.role(0, self.Role.Html)
+        self.assertIn('href="tgc://spoiler/7"', html)
+        changed: list[int] = []
+        self.model.dataChanged.connect(lambda first, last, roles: changed.append(first.row()))
+        self.model.openLink("tgc://spoiler/7")
+        self.assertEqual(changed, [0])
+        html = self.role(0, self.Role.Html)
+        self.assertNotIn("tgc://spoiler", html)
+        self.assertIn("42", html)
+
     async def test_send_with_reply_and_markdown(self) -> None:
         await self.open_loaded()
         self.model.send("**hi**", 6)

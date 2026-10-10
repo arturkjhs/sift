@@ -60,6 +60,7 @@ class Server:
         self.doc_path = doc_path
         self.asked_messages: list[list[int]] = []
         self.members_total = 5
+        self.page_cap = 0  # > 0: getChatHistory returns at most this many (TDLib's local cache)
         self.history: dict[int, list[dict[str, Any]]] = {
             CHAT: [msg(5, "ok see you then", 5, ago=60, reply_to=reply(4)),
                    msg(4, "Friday 18:00 at Lucerna?", ME, ago=120, reply_to=reply(3)),
@@ -103,6 +104,8 @@ class Server:
                 else:
                     page = [m for m in history if not start or m["id"] < start
                             or (req.get("only_local") and m["id"] <= start)][:req["limit"]]
+                if self.page_cap:
+                    page = page[:self.page_cap]
                 return [{"@type": "messages", "total_count": len(page), "messages": page,
                          "@extra": extra}]
             case "getMessage":
@@ -586,6 +589,18 @@ class AssistServiceTest(AssistCase):
         self.ai.explain_message(CHAT, 5, "Olena")  # same message, same edit date: free
         await self.done(CHAT, "explain:5")
         self.assertEqual(len(self.router.requests), 1)
+
+    async def test_message_context_pages_short_history_answers(self) -> None:
+        self.server.page_cap = 1  # TDLib hands out one cached message per request
+        self.assertEqual(await self.ai.context_size(CHAT, 4), 5)
+        self.replies["understand one message"] = "## Gist\nA meeting."
+        self.ai.explain_message(CHAT, 4, "Me")
+        result = await self.done(CHAT, "explain:4")
+        self.assertEqual(result.state, "done", result.error)
+        prompt = self.router.requests[0]["messages"][1]["content"]
+        self.assertIn("Reply chain, oldest first:\n[m3]", prompt)  # a lone parent is kept
+        self.assertIn("[m1]", prompt)
+        self.assertIn("[m5]", prompt)
 
     async def test_reply_options_in_chat_language_with_translation(self) -> None:
         self.ai.set_translate_to("ru")

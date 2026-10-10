@@ -62,6 +62,18 @@ class RichTextTest(unittest.TestCase):
         self.assertIn('href="tg://resolve?domain=bob"', out)
         self.assertIn("background-color:#999;color:#999", out)
 
+    def test_spoiler_is_a_link_until_revealed(self) -> None:
+        ft = {"text": "it is secret.com ok", "entities": [
+            entity("textEntityTypeSpoiler", 6, 10), entity("textEntityTypeUrl", 6, 10)]}
+        hidden = formatted_to_html(ft, P, spoiler_link="tgc://spoiler/5")
+        self.assertIn('<a href="tgc://spoiler/5"', hidden)
+        self.assertIn("background-color:#999;color:#999", hidden)
+        self.assertNotIn("https://secret.com", hidden)  # the link color would show it
+        shown = formatted_to_html(ft, P, spoiler_link="tgc://spoiler/5", reveal_spoilers=True)
+        self.assertNotIn("#999", shown)
+        self.assertNotIn("tgc://spoiler", shown)
+        self.assertIn('href="https://secret.com"', shown)
+
     def test_out_of_range_entities_are_ignored(self) -> None:
         ft = {"text": "hi", "entities": [entity("textEntityTypeBold", 5, 3),
                                           entity("textEntityTypeBold", 0, 0)]}

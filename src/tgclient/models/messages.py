@@ -238,6 +238,7 @@ class MessageListModel(QAbstractListModel):
         self._loading = False
         self._viewed: set[int] = set()
         self._html_cache: dict[int, str] = {}
+        self._revealed: set[int] = set()  # messages whose spoilers were clicked open
         self._media_cache: dict[int, Media | None] = {}
         self._file_messages: dict[int, set[int]] = {}  # file id -> message ids showing it
         self._unread_after = 0  # last read incoming message id when the chat was opened
@@ -944,6 +945,7 @@ class MessageListModel(QAbstractListModel):
         self.beginResetModel()
         self._history = history
         self._viewed = set()
+        self._revealed = set()
         self._html_cache = {}
         self._media_cache = {}
         self._file_messages = {}
@@ -1318,6 +1320,9 @@ class MessageListModel(QAbstractListModel):
     def openLink(self, link: str) -> None:
         """Telegram links open inside the client: a message or chat (linkResolved), an invite
         to join (inviteReady), a hashtag search (searchRequested); others in the browser."""
+        if link.startswith(SPOILER_LINK):
+            self._reveal_spoiler(link)
+            return
         if not links.TELEGRAM_LINK.match(link):
             QDesktopServices.openUrl(QUrl(link))
             return
@@ -1825,7 +1830,8 @@ class MessageListModel(QAbstractListModel):
         if captioned is None:
             return ""
         return formatted_to_html(message_body(captioned.get("content", {})), self._palette,
-                                 self._time_spacer(newest), self._emoji_callback(newest["id"]))
+                                 self._time_spacer(newest), self._emoji_callback(newest["id"]),
+                                 **self._spoilers(captioned["id"]))
 
     def _refresh_albums(self, first: int, last: int) -> None:
         """An album gained or lost a member: all its rows change (hidden/shown, grid)."""
@@ -2087,12 +2093,30 @@ class MessageListModel(QAbstractListModel):
         if body and body.get("text"):
             # The time spacer goes in after highlighting (its digits must not match).
             result = formatted_to_html(body, self._palette, _TAIL,
-                                       self._emoji_callback(message["id"]))
+                                       self._emoji_callback(message["id"]),
+                                       **self._spoilers(message["id"]))
             if self._search_query:
                 result = highlight_html(result, self._search_query, self._search_color)
             result = result.replace(_TAIL, self._time_spacer(message))
         self._html_cache[message["id"]] = result
         return result
+
+    def _spoilers(self, message_id: int) -> dict[str, Any]:
+        return {"spoiler_link": f"{SPOILER_LINK}{message_id}",
+                "reveal_spoilers": message_id in self._revealed}
+
+    def _reveal_spoiler(self, link: str) -> None:
+        """A click on hidden text shows all spoilers of that message until the chat closes."""
+        try:
+            message_id = int(link[len(SPOILER_LINK):])
+        except ValueError:
+            return
+        self._revealed.add(message_id)
+        row = self._history.row_of(message_id) if self._history else -1
+        self._html_cache.pop(message_id, None)
+        if row >= 0:
+            album = self._album_range(row)
+            self._row_changed_plain(album[0] if album else row)
 
     def _emoji_callback(self, message_id: int) -> Any:
         return lambda emoji_id: self._emoji_url(emoji_id, message_id)
@@ -2413,6 +2437,7 @@ class MessageListModel(QAbstractListModel):
 
 
 _TAIL = "<!--time-->"
+SPOILER_LINK = "tgc://spoiler/"
 
 
 def _send_options(options: dict[str, Any]) -> dict[str, Any] | None:

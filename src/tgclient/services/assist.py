@@ -716,7 +716,7 @@ def message_context(
     if chat_summary:
         parts.append("Earlier summary of this chat (may be outdated):\n"
                      + re.sub(r"\[[^\]]*\]\(tgc://[^)]+\)", "", chat_summary)[:3000])
-    if len(lines_chain) > 1:
+    if lines_chain:
         parts.append("Reply chain, oldest first:\n" + "\n".join(lines_chain))
     parts.append("Messages around it, oldest first:\n" + "\n".join(lines_around))
     if my_examples:

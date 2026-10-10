@@ -70,6 +70,9 @@ OWN_FOR_PERSON = 300  # own messages searched for replies to the person
 ANSWER_WINDOW_SECONDS = 3 * 86400
 SMALL_GROUP = 30  # members: up to this, everyone counts as asked
 CONTEXT_AROUND = 20  # messages before and after the one explained / replied to
+CONTEXT_MIN_CHARS = 3000  # older ones are added until there is at least this much text
+CONTEXT_MAX_BEFORE = 80
+CONTEXT_PAGES = 6  # getChatHistory requests per side
 CHAIN_DEPTH = 6  # replied-to messages followed up the chain
 STYLE_EXAMPLES = 15  # the user's own messages showing how they write in the chat
 CONTEXT_TTL = 120.0  # seconds the collected context is reused (menu count -> request)
@@ -960,15 +963,59 @@ class AiService:
                 break
             chain.append(replied)
             current = replied
-        page = await self._client.send({
-            "@type": "getChatHistory", "chat_id": chat_id, "from_message_id": message_id,
-            "offset": -CONTEXT_AROUND, "limit": 2 * CONTEXT_AROUND + 1, "only_local": False})
-        around = [m for m in page.get("messages") or [] if m]
-        if not any(m["id"] == message_id for m in around):
-            around.append(target)
+        around = await self._history_around(chat_id, target)
         parts = _ContextParts(time.monotonic(), target, chain, around)
         self._contexts[(chat_id, message_id)] = parts
         return parts
+
+    async def _history_around(self, chat_id: int,
+                              target: dict[str, Any]) -> list[dict[str, Any]]:
+        """Messages around the target, oldest first. TDLib answers getChatHistory with what
+        it has locally, often a message or two, so each side is paged until it's full:
+        CONTEXT_AROUND newer, and older ones until CONTEXT_AROUND messages and
+        CONTEXT_MIN_CHARS of text (short "ok"s say little), at most CONTEXT_MAX_BEFORE."""
+        message_id = target["id"]
+        found: dict[int, dict[str, Any]] = {message_id: target}
+
+        async def page(from_id: int, offset: int, limit: int) -> list[dict[str, Any]]:
+            try:
+                result = await self._client.send({
+                    "@type": "getChatHistory", "chat_id": chat_id, "from_message_id": from_id,
+                    "offset": offset, "limit": limit, "only_local": False})
+            except TdError:
+                return []
+            return [m for m in result.get("messages") or [] if m]
+
+        for message in await page(message_id, -CONTEXT_AROUND, 2 * CONTEXT_AROUND + 1):
+            found[message["id"]] = message
+        for _ in range(CONTEXT_PAGES):  # older
+            older = [m for i, m in found.items() if i < message_id]
+            chars = sum(len(summaries.message_text(m)) for m in older)
+            if len(older) >= CONTEXT_MAX_BEFORE or (
+                    len(older) >= CONTEXT_AROUND and chars >= CONTEXT_MIN_CHARS):
+                break
+            oldest = min(found)
+            batch = [m for m in await page(oldest, 0, 50) if m["id"] < oldest]
+            if not batch:
+                break  # start of history
+            for message in batch:
+                found[message["id"]] = message
+        chat = self._chats.chats.get(chat_id)
+        last = ((chat.last_message if chat else None) or {}).get("id", 0)
+        for _ in range(CONTEXT_PAGES):  # newer
+            newer = [i for i in found if i > message_id]
+            if len(newer) >= CONTEXT_AROUND or (last and max(found) >= last):
+                break
+            newest = max(found)
+            batch = [m for m in await page(newest, -CONTEXT_AROUND, CONTEXT_AROUND + 1)
+                     if m["id"] > newest]
+            if not batch:
+                break
+            for message in batch:
+                found[message["id"]] = message
+        older = sorted(i for i in found if i < message_id)[-CONTEXT_MAX_BEFORE:]
+        newer = sorted(i for i in found if i > message_id)[:CONTEXT_AROUND]
+        return [found[i] for i in [*older, message_id, *newer]]
 
     def _build_context(self, chat_id: int, parts: _ContextParts,
                        examples: list[str] | None = None) -> assist.MessageContext:
@@ -1101,18 +1148,22 @@ class AiService:
         """A draft of the user's next message (never sent from here). Raises AiUnavailable."""
         self._check(chat_id)
         chat = self._chats.chats[chat_id]
-        messages, _ = await summaries.collect(self._client, chat_id, lambda m: False, limit=30)
+        messages: list[dict[str, Any]] = []
+        target = ""
+        if reply_to:  # the conversation around that message, not just the latest one
+            try:
+                parts = await self._context_parts(chat_id, reply_to)
+                messages = sorted({m["id"]: m for m in (*parts.chain, *parts.around)}.values(),
+                                  key=lambda m: m["id"])
+                target = summaries.message_line(parts.target, self._sender_name(parts.target))
+            except TdError:
+                pass
+        if not messages:
+            messages, _ = await summaries.collect(self._client, chat_id, lambda m: False,
+                                                  limit=30)
         lines = [summaries.message_line(m, "Me" if m.get("is_outgoing") else
                                         self._sender_name(m), self._transcript_of(chat_id))
                  for m in messages]
-        target = ""
-        if reply_to:
-            try:
-                original = await self._client.send(
-                    {"@type": "getMessage", "chat_id": chat_id, "message_id": reply_to})
-                target = summaries.message_line(original, self._sender_name(original))
-            except TdError:
-                pass
         if not any(lines) and not target:
             raise AiUnavailable("Nothing to reply to yet")
         self._check(chat_id)
